@@ -1,6 +1,6 @@
 import { describeSketch } from './shape.js';
-import { bindReferences, classifyIntent, simulateWords, MS_PER_WORD, DEFAULT_WINDOW } from '../extension/lib/fusion.js';
-import { adaptMessage } from '../extension/lib/reson8.js';
+import { bindReferences, classifyIntent, simulateWords, MS_PER_WORD, DEFAULT_WINDOW } from './lib/fusion.js';
+import { adaptMessage } from './lib/reson8.js';
 
 export function makePayload(stroke, t_end, viewport, enclosed_element) {
   const pts = stroke.pts.map(p => Object.freeze({...p, rect: p.rect && Object.freeze({...p.rect})}));
