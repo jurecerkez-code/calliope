@@ -50,7 +50,7 @@ h2{font-size:14px;font-weight:600;}
 .seg{display:flex;gap:2px;padding:3px;border-radius:10px;background:var(--card);box-shadow:0 0 0 1px var(--rule);}
 .seg button{padding:6px 12px;border-radius:7px;font-size:13px;color:var(--muted);}
 .seg button.on{background:var(--ink);color:#fff;}
-.url{flex:1;max-width:620px;display:flex;align-items:center;gap:10px;height:38px;padding:0 4px 0 14px;border-radius:10px;background:var(--card);box-shadow:0 0 0 1px var(--rule);}
+.url{flex:1;max-width:620px;margin-left:auto;display:flex;align-items:center;gap:10px;height:38px;padding:0 4px 0 14px;border-radius:10px;background:var(--card);box-shadow:0 0 0 1px var(--rule);}
 .url svg{flex:none;width:16px;height:16px;fill:none;stroke:var(--muted);stroke-width:1.4;}
 .url input{flex:1;min-width:0;border:0;background:none;font:13px var(--sans);color:var(--ink);outline:none;}
 .url input::placeholder{color:var(--muted);}
