@@ -318,7 +318,7 @@ const MARK_SHAPES = new Set(["circle", "square", "triangle"]);
 
 export function websiteRelations(payloads) {
 	const marks = [];
-	const arrows = [];
+	const relations = [];
 	for (const p of payloads) {
 		const points = p.pts.map((q) => ({ x: q.x, y: q.y }));
 		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
@@ -326,23 +326,19 @@ export function websiteRelations(payloads) {
 		if (MARK_SHAPES.has(p.shape) || p.tool === "highlighter" || classifyShape(points) === "closed-loop") {
 			marks.push({ id: p.id, bbox, target, shape: p.shape });
 		} else if (p.tool === "pen" && diag(bbox) > SMALL) {
-			arrows.push(p);
+			const { from, to, tip } = connect(marks, p.pts);
+			if (!from && !to) continue;
+			if (from && to === from) continue; // a stroke inside one mark is not an arrow
+			const kind = from && to ? "link" : from ? "move" : "point";
+			relations.push({
+				kind,
+				arrow: p.id,
+				from: from ? { stroke: from.id, target: from.target } : null,
+				to: to
+					? { stroke: to.id, target: to.target, x: tip.x, y: tip.y }
+					: { stroke: null, target: tip.selector || "", text: (tip.text || "").replace(/\s+/g, " ").trim().slice(0, 80), x: tip.x, y: tip.y },
+			});
 		}
-	}
-	const relations = [];
-	for (const a of arrows) {
-		const { from, to, tip } = connect(marks, a.pts);
-		if (!from && !to) continue;
-		if (from && to === from) continue; // a stroke inside one mark is not an arrow
-		const kind = from && to ? "link" : from ? "move" : "point";
-		relations.push({
-			kind,
-			arrow: a.id,
-			from: from ? { stroke: from.id, target: from.target } : null,
-			to: to
-				? { stroke: to.id, target: to.target, x: tip.x, y: tip.y }
-				: { stroke: null, target: tip.selector || "", text: (tip.text || "").replace(/\s+/g, " ").trim().slice(0, 80), x: tip.x, y: tip.y },
-		});
 	}
 	return relations;
 }

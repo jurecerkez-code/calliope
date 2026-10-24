@@ -4,7 +4,7 @@
   import Button from './components/ui/button/Button.svelte';
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
-  import { buildBundles, canApply } from './timeline.js';
+  import { buildBundles, canApply, withoutMarks } from './timeline.js';
   import { createAudio } from './audio.js';
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
@@ -55,7 +55,7 @@
       if(rel) addLine('why',describeRelation(rel));
     }
   });}
-  function clearMarks(){drawing?.clear();addLine('fin','MARKS CLEARED');}
+  function clearMarks(){drawing?.clear();timeline=withoutMarks(timeline);deliveries={};addLine('fin','MARKS CLEARED');}
   async function toggleMic(){
     if(micOn){audio?.stop();micOn=false;return;}
     try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
@@ -66,7 +66,7 @@
     if(!canApply(strokes,deliveries)){addLine('err','RETRY FAILED STROKES BEFORE APPLY');return;}
     status='ANTHROPIC IS REASONING...';busy=true;
     try{
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,relations:websiteRelations(strokes),current_html:currentHtml})});
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,relations:websiteRelations(strokes).slice(0,50),current_html:currentHtml})});
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
