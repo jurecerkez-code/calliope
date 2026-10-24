@@ -38,10 +38,10 @@
     <div class="vd-stage">
       <canvas id="vd3d" bind:this={canvas}></canvas>
       <div class="vd-tiles" aria-hidden="true">
-        <div class="vd-tile"><img src="/assets/render-jamiej.png" alt=""></div>
-        <div class="vd-tile"><img src="/assets/render-reson8.png" alt=""></div>
-        <div class="vd-tile"><img src="/assets/render-techeurope.png" alt=""></div>
-        <div class="vd-tile"><img src="/assets/render-anthropica.png" alt=""></div>
+        <div class="vd-tile"></div>
+        <div class="vd-tile"></div>
+        <div class="vd-tile"></div>
+        <div class="vd-tile"></div>
       </div>
     </div>
     <h1 class="vd-title">CALLIOPE</h1>

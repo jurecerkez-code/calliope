@@ -399,9 +399,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         elif self.path == '/loader3d.js' or self.path.startswith('/vendor/') or self.path.startswith('/assets/'):
             relative = self.path.lstrip('/')
-            if self.path.startswith('/assets/') and not re.fullmatch(r'assets/[\w.-]+\.(?:svg|png)', relative):
+            if self.path.startswith('/assets/') and not re.fullmatch(r'assets/[\w.-]+\.(?:svg|png|glb)', relative):
                 return self._send(404, {'error': 'not found'})
-            if self.path.startswith('/vendor/') and not re.fullmatch(r'vendor/[\w.-]+\.js', relative):
+            if self.path.startswith('/vendor/') and not re.fullmatch(r'vendor/(?:utils/)?[\w.-]+\.js', relative):
                 return self._send(404, {'error': 'not found'})
             file = HERE / relative
             if not file.is_file() or file.is_symlink():
