@@ -68,3 +68,35 @@ test('packet text carries mermaid and parseable JSON', () => {
   assert.equal(json.nodes[0].label, 'database');
   assert.equal(json.utterances[0].references[0].element, 'N1');
 });
+
+// Website payloads as timeline.js makePayload builds them (pts carry the element under each point).
+function payload(id, tool, shape, pts, extra = {}) {
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  return { id, tool, shape, pts, elements: [], enclosed_element: '', ...extra,
+    bbox: { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) } };
+}
+const ring = (cx, cy, r) => Array.from({ length: 40 }, (_, i) => ({ x: cx + r * Math.cos((i / 39) * 2 * Math.PI), y: cy + r * Math.sin((i / 39) * 2 * Math.PI), selector: 'button.btn' }));
+const stroke = (x1, y1, x2, y2, endSelector) => Array.from({ length: 21 }, (_, i) => ({ x: x1 + ((x2 - x1) * i) / 20, y: y1 + ((y2 - y1) * i) / 20, selector: i === 20 ? endSelector : 'main' }));
+
+test('website: arrow from a circled element to empty space is a move', async () => {
+  const { websiteRelations } = await import('./src/diagram.js');
+  const marks = [
+    payload('a', 'pen', 'circle', ring(200, 200, 50), { enclosed_element: 'button.btn "Download"' }),
+    payload('b', 'pen', 'freehand', stroke(210, 210, 700, 500, 'section.stat'), { elements: ['main'] }),
+  ];
+  const [r] = websiteRelations(marks);
+  assert.equal(r.kind, 'move');
+  assert.deepEqual(r.from, { stroke: 'a', target: 'button.btn "Download"' });
+  assert.deepEqual([r.to.stroke, r.to.target, r.to.x, r.to.y], [null, 'section.stat', 700, 500]);
+});
+
+test('website: arrow between a highlight and a circle is a link; a stroke inside one mark is nothing', async () => {
+  const { websiteRelations } = await import('./src/diagram.js');
+  const hl = payload('h', 'highlighter', 'highlight', stroke(100, 100, 300, 100, 'h1'), { elements: ['h1'] });
+  const circle = payload('c', 'pen', 'circle', ring(700, 300, 60), { enclosed_element: 'section.stat' });
+  const arrow = payload('x', 'pen', 'freehand', stroke(200, 100, 690, 300, 'section.stat'));
+  const inside = payload('y', 'pen', 'freehand', stroke(670, 280, 730, 320, 'section.stat'));
+  const rels = websiteRelations([hl, circle, arrow, inside]);
+  assert.equal(rels.length, 1);
+  assert.deepEqual([rels[0].kind, rels[0].from.target, rels[0].to.target], ['link', 'h1', 'section.stat']);
+});

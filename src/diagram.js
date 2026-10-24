@@ -4,7 +4,7 @@
 // Pure functions over plain data; no DOM.
 
 import { buildTimeline, fuse } from "../extension/lib/fusion.js";
-import { makeStroke } from "../extension/lib/strokes.js";
+import { classifyShape, makeStroke } from "../extension/lib/strokes.js";
 import { recognizeShape } from "./shape-recognition.js";
 
 const NEAR = 28; // px around a node that still counts as touching it
@@ -43,6 +43,14 @@ function tipOf(points) {
 				: far,
 		s,
 	);
+}
+
+// The one rule for "this stroke connects that to that", shared by BLANK CANVAS and
+// WEBSITE mode: the stroke's first point picks the node it starts from, its tip
+// picks the node it goes to. nodes: [{bbox:{x,y,w,h}}]. Either end can be null.
+export function connect(nodes, points) {
+	const tip = tipOf(points);
+	return { from: nodeAt(nodes, points[0]), to: nodeAt(nodes, tip), tip };
 }
 
 // strokes: [{id, tool, points:[{x,y,t}]}] in board CSS pixels, t in session ms.
@@ -154,8 +162,7 @@ export function buildDiagram(strokes, utterances) {
 	for (const r of recs) {
 		if (owner[r.id] || r.kind === "highlight" || diag(r.bbox) <= SMALL)
 			continue;
-		const from = nodeAt(nodes, r.points[0]);
-		const to = nodeAt(nodes, r.tip);
+		const { from, to } = connect(nodes, r.points);
 		if (from && to && from !== to) {
 			const e = {
 				id: `E${edges.length + 1}`,
@@ -297,4 +304,53 @@ export function canvasPacketText(packet) {
 		"",
 		"The PNG snapshot shows the original drawing; ids N1, E1, ... are written next to each element.",
 	].join("\n");
+}
+
+// ---------- WEBSITE mode: marks on the page and arrows between them ----------
+// A circle/square/triangle, any other closed loop, or a highlight marks a DOM
+// element ("this"). A pen stroke that starts on a mark is an arrow from it:
+//   move  - its tip lands on the page, not on another mark ("put this there")
+//   link  - its tip lands on another mark ("this goes with that")
+//   point - it starts on no mark but its tip lands on one ("look at this")
+// payloads: website stroke payloads from timeline.js makePayload (pts carry the
+// selector and text of the element under each point).
+const MARK_SHAPES = new Set(["circle", "square", "triangle"]);
+
+export function websiteRelations(payloads) {
+	const marks = [];
+	const arrows = [];
+	for (const p of payloads) {
+		const points = p.pts.map((q) => ({ x: q.x, y: q.y }));
+		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
+		const target = (MARK_SHAPES.has(p.shape) && p.enclosed_element) || p.elements?.[0] || "";
+		if (MARK_SHAPES.has(p.shape) || p.tool === "highlighter" || classifyShape(points) === "closed-loop") {
+			marks.push({ id: p.id, bbox, target, shape: p.shape });
+		} else if (p.tool === "pen" && diag(bbox) > SMALL) {
+			arrows.push(p);
+		}
+	}
+	const relations = [];
+	for (const a of arrows) {
+		const { from, to, tip } = connect(marks, a.pts);
+		if (!from && !to) continue;
+		if (from && to === from) continue; // a stroke inside one mark is not an arrow
+		const kind = from && to ? "link" : from ? "move" : "point";
+		relations.push({
+			kind,
+			arrow: a.id,
+			from: from ? { stroke: from.id, target: from.target } : null,
+			to: to
+				? { stroke: to.id, target: to.target, x: tip.x, y: tip.y }
+				: { stroke: null, target: tip.selector || "", text: (tip.text || "").replace(/\s+/g, " ").trim().slice(0, 80), x: tip.x, y: tip.y },
+		});
+	}
+	return relations;
+}
+
+// One readable line per relation, for the log.
+export function describeRelation(r) {
+	const at = `(${Math.round(r.to.x)}, ${Math.round(r.to.y)})`;
+	if (r.kind === "move") return `ARROW: MOVE ${r.from.target || "MARKED AREA"} → ${at}${r.to.target ? " ON " + r.to.target : ""}`;
+	if (r.kind === "link") return `ARROW: ${r.from.target || "MARK"} → ${r.to.target || "MARK"}`;
+	return `ARROW: POINTS AT ${r.to.target || "MARK"}`;
 }

@@ -85,8 +85,41 @@ def valid_stroke(s):
 
 
 # ---------- Anthropic: REASON about the turn, then EXECUTE the website change ----------
-def claude_apply(bundles: list, current_html: str) -> dict:
+def _clip(v, n=200) -> str:
+    return re.sub(r"[\x00-\x1f]", " ", str(v if v is not None else ""))[:n]
+
+
+def relation_lines(relations) -> list:
+    """One prompt line per arrow from src/diagram.js websiteRelations().
+    kind: move (mark -> spot on the page), link (mark -> mark), point (-> mark).
+    Anything malformed is skipped; at most 50 lines."""
+    lines = []
+    for r in relations[:50] if isinstance(relations, list) else []:
+        if not isinstance(r, dict) or r.get("kind") not in ("move", "link", "point"):
+            continue
+        src = r.get("from") if isinstance(r.get("from"), dict) else {}
+        dst = r.get("to") if isinstance(r.get("to"), dict) else {}
+        try:
+            at = f"({round(float(dst.get('x', 0)))}, {round(float(dst.get('y', 0)))})"
+        except (TypeError, ValueError):
+            continue
+        what = _clip(src.get("target")) or "the marked area"
+        if r["kind"] == "move":
+            on = f" over {_clip(dst.get('target'))}" if dst.get("target") else ""
+            text = f' ("{_clip(dst.get("text"), 80)}")' if dst.get("text") else ""
+            lines.append(f"ARROW from the mark on {what} to page point {at}{on}{text}: "
+                         "the user most likely wants that element moved or placed there.")
+        elif r["kind"] == "link":
+            lines.append(f"ARROW from the mark on {what} to the mark on {_clip(dst.get('target')) or 'another area'}: "
+                         "the user relates these two (e.g. move next to, replace with, match).")
+        else:
+            lines.append(f"ARROW pointing at the mark on {_clip(dst.get('target')) or 'an area'} at {at}.")
+    return lines
+
+
+def claude_apply(bundles: list, current_html: str, relations: list = None) -> dict:
     """bundles: [{t_start, t_end, transcript, strokes:[{t,t_end,pts,elements}]}]
+    relations: optional arrows between marks, see relation_lines().
     Returns {"reasoning": str, "html": str}."""
     timeline_desc = []
     for b in bundles:
@@ -127,6 +160,9 @@ def claude_apply(bundles: list, current_html: str) -> dict:
         'Answer as JSON: {"reasoning": "...", "html": "<!DOCTYPE html>..."}\n\n'
         "TURN TIMELINE (words + sketches, one clock):\n"
         + "\n".join(timeline_desc)
+        + ("\n\nARROWS BETWEEN MARKS (an arrow starts on a circled or highlighted element; "
+           "where it ends says where that element should go):\n" + "\n".join(arrows)
+           if (arrows := relation_lines(relations)) else "")
         + f"\n\nCURRENT HTML:\n{current_html}"
     )
     body = {
@@ -263,7 +299,7 @@ class Handler(BaseHTTPRequestHandler):
                 with STROKES_LOCK:
                     if any(STROKES.get(s.get('id')) != s for s in strokes):
                         return self._send(409, {'error': 'stroke not accepted by backend; retry delivery'})
-                out = claude_apply(payload.get("bundles", []), payload.get("current_html", ""))
+                out = claude_apply(payload.get("bundles", []), payload.get("current_html", ""), payload.get("relations", []))
                 self._send(200, out)
             except Exception as e:  # surface the error to the UI, never crash the demo
                 self._send(500, {"error": str(e)})

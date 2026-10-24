@@ -7,7 +7,7 @@
   import { buildBundles, canApply } from './timeline.js';
   import { createAudio } from './audio.js';
   import { attachBoard } from './board.js';
-  import { buildDiagram, buildCanvasPacket, canvasPacketText } from './diagram.js';
+  import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from '../extension/lib/fusion.js';
   let feed, prev, eq, boardEl;
   let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
@@ -50,6 +50,9 @@
       stroke.payload=payload;stroke.summary=summary;
       timeline.push({kind:'stroke',t:stroke.t,t_end:payload.t_end,payload});
       deliver(stroke);
+      // an arrow from a circled/highlighted element: say where it goes
+      const rel=websiteRelations(timeline.filter(e=>e.kind==='stroke').map(e=>e.payload)).find(r=>r.arrow===payload.id);
+      if(rel) addLine('why',describeRelation(rel));
     }
   });}
   function clearMarks(){drawing?.clear();addLine('fin','MARKS CLEARED');}
@@ -63,7 +66,7 @@
     if(!canApply(strokes,deliveries)){addLine('err','RETRY FAILED STROKES BEFORE APPLY');return;}
     status='ANTHROPIC IS REASONING...';busy=true;
     try{
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,current_html:currentHtml})});
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,relations:websiteRelations(strokes),current_html:currentHtml})});
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
