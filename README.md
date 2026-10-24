@@ -75,31 +75,27 @@ Website URL fields are for importing a page, not typing instructions. Voice and 
 
 ## How it was built
 
-The story of the build, in order, because the path is part of the answer.
+The story of the build, reconstructed from the commit history, because the path is part of the answer. One afternoon, five people, one reviewed pull request at a time.
 
-1. **Research before code.** The morning went to the sponsors' actual APIs: Jamie's meeting data (REST, MCP, webhooks), Reson8's turns endpoint with word-level timestamps, and the Claude API. We picked meeting intelligence as the space because talk and sketch happen together there and every tool captures only one channel.
+1. **13:37, the first working loop.** The morning went to the sponsors' real APIs (Jamie's meeting data, Reson8's turns endpoint, the Claude API), then the first push landed the whole loop at once: a studio where you draw on a website while speaking, a local audio relay so the API key never reaches the browser, and an agent that returns updated HTML. A runnable end-to-end proof script came with it, and running it against the real APIs caught that Reson8's turn_end event is an empty marker (the text lives on turn_end_candidate). Real pipelines find real bugs.
 
-2. **We explored a character first.** The first concept was AGENT-741, a meeting referee that scores your promises: comedy cards on the surface, an eternal promise ledger underneath. We built a full visual shell for it. It taught us demo craft, and it exposed the real gap: notes without follow-through.
+2. **14:26, two experiments in parallel.** A "Draw and Talk" Chrome extension shipped first (later retired cleanly, with its shared fusion library kept in the studio), and the studio itself was rebuilt as a shape-aware Svelte app with stroke receipts and backend readback: every mark is registered and acknowledged before the agent may use it.
 
-3. **The rules sharpened the target.** The competition brief said judged on technical complexity and creativity, bonus for partner tech, and the 19:00 "opt-in" was actually a submission: a 2-minute video, a detailed explanation, and a public repository with full API documentation.
+3. **14:50, hardening and modes.** A tight loop of fixes made the studio survive real screens (sidebar fit, narrow layouts, the voice meter), grouped marks settle before delivery, and two modes appeared: **blank canvas**, where speech and sketches become a diagram with named nodes and edges, and a recording/live toggle so a session can be captured without calling the agent.
 
-4. **The pivot.** A teammate's board said it plainly: speak to the agent while drawing on the website. We cut the riskiest part (auto-deploy) and kept the novel part: words and marks on one clock, with the preview as the website and deployment as an explicit human decision.
+4. **15:06, the clock problem.** Message arrival time is not speech time. A reproduced bug (marks attaching to the previous sentence) was fixed by placing every utterance at its true audio position from Reson8's per-word timestamps. On that clock, deictic words ("this", "that", "here") bind to the mark nearest in time, "move this here" resolves to two marks, and the Lanes timeline shows words, marks and the links between them. Follow-up fixes locked turn bounds and word times to the same clock.
 
-5. **The spec became the contract.** Transcribe in short, timestamped chunks. Draw on the live website while capturing the HTML elements beneath the marks. Send each chunk with the sketches of its own time window, and never cut a stroke in half. Show the preview fast. Never publish an unfinished idea.
+5. **15:19, the loading screen is real 3D.** Four chrome-glass sponsor logos (Jamie, Reson8, {Tech: Europe}, Anthropic) modeled in Blender, exported as glTF, mounted on dark glass tiles. A progress bar that slid backwards got one monotonic source of truth, and the invisible-logos bug turned out to be a broken relative import in a vendored loader that silently fell back to plain tiles: proven fixed by executing the module graph.
 
-6. **The clock problem.** Message arrival time is not speech time. We found and reproduced a real bug where marks attached to the previous sentence, then placed every utterance at its true audio position using Reson8's per-word timestamps. Everything downstream compares on that clock.
+6. **15:31, drawing semantics.** "Circle this, arrow to there" became a move instruction. Multi-stroke marks settle before delivery, arrow relations stay tied to accepted marks, and one stroke recognizer now serves both the canvas and the website. The startup screen lets you import a public URL (empty defaults to the Jamie homepage) or start blank, with bounded fetches and cross-origin writes rejected.
 
-7. **Fusion: words to marks.** "This", "that" and "here" bind to the mark nearest in time (6 seconds before, 2.5 seconds after, because people point slightly before speaking). "Move this here" resolves to two marks. Intent rules separate the subtle cases: "put the headline here" is a move, "put the new chart here" is an add.
+7. **16:43, the agent acts on its own.** Turn-scoped auto-execution: in Live mode each completed spoken turn goes to the agent automatically, with its captured sketches. Reasoning became optional, session traces are persisted privately, and mark settle timing was tuned to one second.
 
-8. **The agent executes.** The agent compares words with marks, then uses Pi's edit tool to change exact spans of a virtual HTML document; it does not need to return the full page. The prompt carries a structured timeline with intents, sketch geometry, DOM targets and explicit REFERENCE lines the agent is told to trust. Every mark is registered with the backend and gets a receipt before the agent accepts it.
+8. **17:35, targeted edits instead of rewrites.** The agent stopped returning whole pages. It now calls a published edit tool with small, exact replacements against the document, the server validates the full result, failed provider attempts retry up to three times, and validated edits preview progressively while the turn is still running. Provider selection prefers Claude and can pin alternatives, with response handling covered by mocked HTTP tests.
 
-9. **Prove it by running it.** The repository ships a runnable end-to-end script: generated speech to Reson8 to stroke receipt to agent response to executed HTML. Running it against the real APIs caught that Reson8's turn_end event is an empty marker and the text lives on turn_end_candidate. Real pipelines find real bugs.
+9. **18:27, presentation.** Claude API named as the brain throughout the README, diagrams and env template; hero and team sections cleaned up.
 
-10. **One studio, one team.** The web studio moved to Svelte and grew shape recognition (circles, squares, triangles, line direction and angle), multi-stroke marks and an import-any-URL canvas. An early Chrome extension experiment was removed cleanly, with its shared library (deictic fusion, Reson8 message adapter) kept in the studio. Every change shipped as a reviewed pull request.
-
-11. **The loading screen is real 3D.** Four chrome-glass sponsor logos modeled in Blender (Jamie, Reson8, {Tech: Europe}, Anthropic), exported as glTF, spinning on dark glass tiles. A progress bar that slid backwards was fixed by giving it one monotonic source of truth, and the final invisible-logos bug turned out to be a broken relative import in a vendored loader that silently fell back to plain tiles: proven fixed by executing the module graph.
-
-12. **Where it landed.** A runnable speech-to-agent proof against real APIs, 57+ automated tests, and a documented public repository. The browser's Live voice-to-preview path still needs an end-to-end check before we call that demo verified.
+10. **Where it landed.** One product: speak and draw on a website (or a blank canvas) while it changes, words and marks on one clock, receipts and validation under every edit, a 3D loader of the team's own Blender logos, and every change on record as a reviewed pull request.
 
 ## Sponsor tech, and why
 
