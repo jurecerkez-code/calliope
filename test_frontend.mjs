@@ -36,5 +36,5 @@ test('Calliope retains its brand and staged publish control in the migrated stud
   const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /CALLIOPE \/\/ SPEAK \+ DRAW/);
   assert.match(app, /\/api\/publish/);
-  assert.match(app, /PUBLISH/);
+  assert.match(app, />Publish</);
 });

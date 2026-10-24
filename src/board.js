@@ -1,12 +1,11 @@
 // Blank canvas board: an SVG the user draws on directly (no website underneath).
 // Imperative like drawing.js; Svelte never re-renders the SVG's contents.
 // Styles are inline attributes so the PNG export looks the same as the screen.
+import { INK as BRAND_INK, inkOutline, polyline } from "./ink.js";
+
 const NS = "http://www.w3.org/2000/svg";
 export const BOARD = { width: 2400, height: 1600 };
-const INK = {
-	pen: { stroke: "#37ff8b", width: 3, opacity: 1 },
-	highlighter: { stroke: "#ffd166", width: 18, opacity: 0.45 },
-};
+const PAPER = "#FFFFFF";
 
 function el(tag, attrs = {}, text) {
 	const node = document.createElementNS(NS, tag);
@@ -14,8 +13,23 @@ function el(tag, attrs = {}, text) {
 	if (text != null) node.textContent = text;
 	return node;
 }
-const pathFor = (pts) =>
-	"M " + pts.map((p) => `${Math.round(p.x)} ${Math.round(p.y)}`).join(" L ");
+// pen strokes are filled ink outlines (see ink.js); the highlighter stays a broad stroke
+const render = (s) =>
+	s.path.setAttribute(
+		"d",
+		s.tool === "highlighter" ? polyline(s.points) : inkOutline(s.points),
+	);
+const inkAttrs = (t) =>
+	t === "highlighter"
+		? {
+				fill: "none",
+				stroke: BRAND_INK.highlighter.color,
+				"stroke-width": BRAND_INK.highlighter.width,
+				"stroke-opacity": BRAND_INK.highlighter.opacity,
+				"stroke-linecap": "round",
+				"stroke-linejoin": "round",
+			}
+		: { fill: BRAND_INK.pen.color };
 
 export function attachBoard(svg, { tool, elapsed, onStroke }) {
 	svg.setAttribute("viewBox", `0 0 ${BOARD.width} ${BOARD.height}`);
@@ -29,14 +43,14 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 		height: 24,
 		patternUnits: "userSpaceOnUse",
 	});
-	grid.append(el("circle", { cx: 1, cy: 1, r: 1, fill: "#16302a" }));
+	grid.append(el("circle", { cx: 1, cy: 1, r: 1, fill: "rgba(23,23,23,0.13)" }));
 	defs.append(grid);
 	const bg = el("rect", {
 		x: 0,
 		y: 0,
 		width: BOARD.width,
 		height: BOARD.height,
-		fill: "#06100b",
+		fill: PAPER,
 	});
 	const dots = el("rect", {
 		x: 0,
@@ -48,7 +62,7 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 	const ink = el("g", { "data-layer": "ink" });
 	const labels = el("g", {
 		"data-layer": "labels",
-		"font-family": "SF Mono, Consolas, monospace",
+		"font-family": "JetBrains Mono, SF Mono, Menlo, monospace",
 	});
 	svg.append(defs, bg, dots, ink, labels);
 
@@ -64,24 +78,16 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 		try {
 			svg.setPointerCapture(e.pointerId);
 		} catch (_) {}
-		const t = tool(),
-			style = INK[t] || INK.pen,
+		const t = tool() === "highlighter" ? "highlighter" : "pen",
 			p = point(e);
 		cur = {
 			id: `S${next++}`,
 			tool: t,
 			points: [p],
 			pointerId: e.pointerId,
-			path: el("path", {
-				fill: "none",
-				stroke: style.stroke,
-				"stroke-width": style.width,
-				"stroke-opacity": style.opacity,
-				"stroke-linecap": "round",
-				"stroke-linejoin": "round",
-				d: pathFor([p, p]),
-			}),
+			path: el("path", inkAttrs(t)),
 		};
+		render(cur);
 		ink.append(cur.path);
 		e.preventDefault();
 	});
@@ -89,7 +95,7 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 		if (!cur || e.pointerId !== cur.pointerId) return;
 		const events = e.getCoalescedEvents?.() || [];
 		for (const ev of events.length ? events : [e]) cur.points.push(point(ev));
-		cur.path.setAttribute("d", pathFor(cur.points));
+		render(cur);
 		e.preventDefault();
 	});
 	const finish = (e) => {
@@ -97,7 +103,7 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 		const s = cur;
 		cur = null;
 		s.points.push(point(e));
-		s.path.setAttribute("d", pathFor(s.points));
+		render(s);
 		strokes.push(s);
 		onStroke({ id: s.id, tool: s.tool, points: s.points });
 	};
@@ -130,8 +136,8 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 					{
 						x: n.bbox.x + 4,
 						y: n.bbox.y - 8,
-						"font-size": 13,
-						fill: "#6f8f84",
+						"font-size": 12,
+						fill: "#6E685C",
 					},
 					n.id,
 				);
@@ -143,9 +149,10 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 							{
 								x: n.bbox.x + n.bbox.w / 2,
 								y: n.bbox.y + n.bbox.h / 2 + 6,
-								"font-size": 18,
-								"font-weight": 700,
-								fill: "#c8ffd8",
+								"font-size": 22,
+								"font-style": "italic",
+								"font-family": "Hoefler Text, Baskerville, Georgia, serif",
+								fill: "#171717",
 								"text-anchor": "middle",
 							},
 							n.label,
@@ -166,8 +173,8 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 						{
 							x: mid.x,
 							y: mid.y - 10,
-							"font-size": 13,
-							fill: e.label ? "#ffd166" : "#6f8f84",
+							"font-size": 12,
+							fill: e.label ? "#111111" : "#6E685C",
 							"text-anchor": "middle",
 						},
 						e.label ? `${e.id} ${e.label}` : e.id,
