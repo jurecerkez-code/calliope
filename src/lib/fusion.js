@@ -282,8 +282,7 @@ export function packetText(packet) {
 	].join("\n");
 }
 
-// Simulated speech: spreads typed words evenly over [startMs, endMs] so they look like
-// a Reson8 transcript with word timestamps.
+// Estimate word times when the speech provider omits them.
 export function simulateWords(text, startMs, endMs) {
 	const tokens = text.trim().split(/\s+/).filter(Boolean);
 	if (!tokens.length) return [];
@@ -295,5 +294,4 @@ export function simulateWords(text, startMs, endMs) {
 	}));
 }
 
-// Typical speaking rate, used when there is no typing interval to go on.
 export const MS_PER_WORD = 380;
