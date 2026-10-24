@@ -29,10 +29,80 @@ class SlowUpstream(BaseHTTPRequestHandler):
             self.wfile.flush()
 
 
+class OriginUpstream(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        body = json.dumps({'audioPort': 8081, 'publishEnabled': False}).encode()
+        self.send_response(200)
+        self.send_header('content-type', 'application/json')
+        self.send_header('content-length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers['content-length']))
+        allowed = (self.headers['Host'] == 'studio.example.test:443' and
+                   self.headers.get('Origin') == 'https://studio.example.test:443')
+        body = json.dumps({'accepted': allowed}).encode()
+        self.send_response(200 if allowed else 403)
+        self.send_header('content-type', 'application/json')
+        self.send_header('content-length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
 class GateStreamTest(unittest.TestCase):
     def test_removed_3d_paths_are_not_allowlisted(self):
         self.assertNotIn('/loader3d.js', GET_PATHS)
         self.assertNotIn('/assets/logos.glb', GET_PATHS)
+
+    def test_https_config_and_origin_survive_page_gate(self):
+        upstream = ThreadingHTTPServer(('127.0.0.1', 0), OriginUpstream)
+        gate = ThreadingHTTPServer(('127.0.0.1', 0),
+                                   make_handler('owner@example.test', upstream.server_port, 8081,
+                                                'https://studio.example.test:443', 8443, 'page'))
+        workers = [threading.Thread(target=instance.serve_forever, daemon=True)
+                   for instance in (upstream, gate)]
+        for worker in workers:
+            worker.start()
+        client = http.client.HTTPConnection('127.0.0.1', gate.server_port, timeout=2)
+        headers = {'Tailscale-User-Login': 'owner@example.test',
+                   'Origin': 'https://studio.example.test:443',
+                   'content-type': 'application/json'}
+        try:
+            client.request('GET', '/api/config', headers=headers)
+            response = client.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())['audioPort'], 8443)
+            client.request('POST', '/api/trace', b'{}', headers)
+            response = client.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(json.loads(response.read())['accepted'])
+        finally:
+            client.close()
+            for instance in (gate, upstream):
+                instance.shutdown()
+                instance.server_close()
+            for worker in workers:
+                worker.join()
+
+    def test_audio_gate_rejects_page_requests(self):
+        gate = ThreadingHTTPServer(('127.0.0.1', 0),
+                                   make_handler('owner@example.test', 1, 8081,
+                                                'https://studio.example.test:443', 8443, 'audio'))
+        worker = threading.Thread(target=gate.serve_forever, daemon=True)
+        worker.start()
+        client = http.client.HTTPConnection('127.0.0.1', gate.server_port, timeout=2)
+        try:
+            client.request('GET', '/', headers={'Tailscale-User-Login': 'owner@example.test'})
+            self.assertEqual(client.getresponse().status, 404)
+        finally:
+            client.close()
+            gate.shutdown()
+            gate.server_close()
+            worker.join()
 
     def test_first_edit_arrives_before_upstream_finishes(self):
         SlowUpstream.first_sent.clear()

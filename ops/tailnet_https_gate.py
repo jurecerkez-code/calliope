@@ -4,11 +4,13 @@ Serve strips spoofed Tailscale-User-Login headers and supplies the real user's
 identity. Never expose this listener outside loopback or through Funnel.
 """
 import http.client
+import json
 import os
 import re
 import select
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 GET_PATHS = {'/', '/index.html', '/jamie-mock.html', '/api/config'}
 POST_PATHS = {'/api/import', '/api/strokes', '/api/strokes/readback',
@@ -18,7 +20,7 @@ IMAGE = re.compile(r'/assets/[A-Za-z0-9_.-]+\.(?:svg|png)\Z')
 WS_KEY = re.compile(r'[A-Za-z0-9+/]{22}==\Z')
 
 
-def make_handler(owner, http_port, audio_port):
+def make_handler(owner, http_port, audio_port, origin='', serve_audio_port=None, role='page'):
     class Gate(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
 
@@ -40,10 +42,12 @@ def make_handler(owner, http_port, audio_port):
         def forward(self):
             if self.client_address[0] != '127.0.0.1' or self.headers.get('Tailscale-User-Login') != owner:
                 return self.reply(403)
-            if self.command == 'GET' and self.headers.get('Upgrade', '').lower() == 'websocket':
-                if self.path != '/':
-                    return self.reply(404)
-                return self.audio()
+            is_audio = (self.command == 'GET' and self.path == '/' and
+                        self.headers.get('Upgrade', '').lower() == 'websocket')
+            if role == 'audio':
+                return self.audio() if is_audio else self.reply(404)
+            if self.headers.get('Upgrade'):
+                return self.reply(404)
             allowed = (self.path in GET_PATHS or bool(BUNDLE.fullmatch(self.path) or IMAGE.fullmatch(self.path))) if self.command == 'GET' else self.path in POST_PATHS
             if not allowed:
                 return self.reply(404)
@@ -53,14 +57,22 @@ def make_handler(owner, http_port, audio_port):
                 if length < 0 or length > 512_000:
                     return self.reply(413)
                 body = self.rfile.read(length) if length else None
+                headers = {'Host': urlsplit(origin).netloc} if origin else {}
+                if body:
+                    headers['content-type'] = self.headers.get('content-type', '')
+                if self.headers.get('Origin'):
+                    headers['Origin'] = self.headers['Origin']
                 conn = http.client.HTTPConnection('127.0.0.1', http_port, timeout=120)
                 try:
-                    conn.request(self.command, self.path, body,
-                                 headers={'content-type': self.headers.get('content-type', '')} if body else {})
+                    conn.request(self.command, self.path, body, headers=headers)
                     response = conn.getresponse()
                     stream = (self.command == 'POST' and self.path == '/api/apply' and
                               response.getheader('content-type', '').startswith('application/x-ndjson'))
                     data = b'' if stream else response.read()
+                    if not stream and self.path == '/api/config' and response.status == 200:
+                        config = json.loads(data)
+                        config['audioPort'] = serve_audio_port or audio_port
+                        data = json.dumps(config).encode()
                     self.send_response(response.status)
                     for key in ('content-type', 'content-security-policy', 'cache-control'):
                         value = response.getheader(key)
@@ -126,4 +138,7 @@ def make_handler(owner, http_port, audio_port):
 if __name__ == '__main__':
     ThreadingHTTPServer(('127.0.0.1', int(os.environ['GATE_PORT'])),
                         make_handler(os.environ['TAILNET_LOGIN'], int(os.environ['HTTP_PORT']),
-                                     int(os.environ['AUDIO_PORT']))).serve_forever()
+                                     int(os.environ['AUDIO_PORT']),
+                                     os.environ.get('STUDIO_ORIGIN', ''),
+                                     int(os.environ.get('SERVE_AUDIO_PORT', os.environ['AUDIO_PORT'])),
+                                     os.environ.get('GATE_ROLE', 'page'))).serve_forever()
