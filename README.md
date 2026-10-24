@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/hero-v2.svg" alt="CALLIOPE: speak + draw on the website, it changes live" width="900">
+  <img src="assets/header.png" alt="CALLIOPE: speak + draw on the website, it changes live" width="900">
 </p>
 
 <h1 align="center">calliope</h1>
