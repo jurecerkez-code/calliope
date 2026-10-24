@@ -121,6 +121,12 @@ def valid_relations(relations, marks) -> bool:
         return True
     if any(not isinstance(mark, dict) or not isinstance(mark.get('strokes'), list) for mark in marks):
         return False
+    try:
+        if any(isinstance(mark.get('t'), bool) or not isinstance(mark.get('t'), (int, float))
+               or not math.isfinite(mark['t']) for mark in marks):
+            return False
+    except OverflowError:
+        return False
     ordered = sorted(marks, key=lambda mark: mark['t'])
     by_id = {mark['id']: (i, mark) for i, mark in enumerate(ordered)}
     if len(by_id) != len(ordered):

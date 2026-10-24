@@ -130,6 +130,7 @@ class StudioTest(unittest.TestCase):
         self.assertTrue(server.valid_relations([point], [item(first), item(second), item(pointing)]))
         self.assertFalse(server.valid_relations([{**point, 'from': link['from']}],
                                                 [item(first), item(second), item(pointing)]))
+        self.assertFalse(server.valid_relations([link], [{**item(first), 't': 'not-a-time'}, item(second), item(arrow)]))
 
     def test_cross_origin_post_cannot_invoke_agent_or_stage_content(self):
         request = {'bundles': [], 'current_html': '<html></html>'}
