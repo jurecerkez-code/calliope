@@ -30,14 +30,15 @@ export function adaptTurn(final, candidate, audioStartMs, nowMs) {
   const sameWords = (a, b) => a.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(' ') ===
     b.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(' ');
   const finalWords = final.words?.length > 0;
+  const sameTurnStart = final.start_ms == null || final.start_ms === candidate?.start_ms;
   const msg = {
     ...candidate, ...final,
     // Final word times supersede candidate bounds when final turn bounds are absent.
     start_ms:final.start_ms ?? (finalWords ? null : candidate?.start_ms),
-    duration_ms:final.duration_ms ?? (finalWords ? null : candidate?.duration_ms),
+    duration_ms:final.duration_ms ?? (finalWords || !sameTurnStart ? null : candidate?.duration_ms),
     // A corrected final transcript can reorder words without changing its length.
     words:finalWords ? final.words :
-      sameWords(text, candidate?.text || '') ? candidate?.words : []
+      sameTurnStart && sameWords(text, candidate?.text || '') ? candidate?.words : []
   };
   const timed = audioStartMs != null && (msg.start_ms != null || msg.words?.length > 0);
   const turn = adaptMessage({...msg, type:'transcript', text}, audioStartMs);

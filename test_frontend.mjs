@@ -141,6 +141,9 @@ test('a corrected final transcript never borrows candidate word positions by ind
   ]},candidate,5000,9000);
   assert.deepEqual([correctedTimes.startMs,correctedTimes.endMs],[8000,9000]);
   assert.deepEqual(correctedTimes.words[1],{text:'this',startMs:8300,endMs:8500});
+  const movedStart=adaptTurn({text:'make this green',start_ms:3000},candidate,5000,9000);
+  assert.deepEqual([movedStart.startMs,movedStart.endMs],[8000,9140]);
+  assert.deepEqual([movedStart.words[1].startMs,movedStart.words[1].endMs],[8380,8722]);
 });
 
 test('bundled shape interpreter keeps the enclosed DOM target and natural-language hint', () => {
