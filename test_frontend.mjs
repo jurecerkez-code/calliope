@@ -23,6 +23,19 @@ test('one complete immutable stroke per timeline event, with ordered points and 
   assert.equal(canApply([first,second], {a:'accepted',b:'accepted'}), true);
 });
 
+test('session rows open the full text on demand, separate from their compact labels', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /copyText:agentMessage/);
+  assert.match(app, /copyText:out\.agent_message/);
+  assert.match(app, /state:response\.ok\?'SENT':'PREPARED \/ NOT SENT'/);
+  assert.match(app, /<dialog[^>]*bind:this=\{detailDialog\}/);
+  assert.match(app, /onclick=\{\(\) => openDetail\(row\)\}/);
+  assert.match(app, /readonly[^>]*value=\{selectedRow\.copyText \?\? selectedRow\.text\}/);
+  assert.match(app, /SELECT TEXT/);
+  assert.doesNotMatch(app, /<Lanes\b/);
+  assert.doesNotMatch(app, /<textarea[^>]*value=\{row\.copyText\}/);
+});
+
 test('a mark drawn during speech follows that utterance, including in the word lane', () => {
   const mark = makePayload({id:'during',tool:'pen',t:2600,pts,elements:['button#download']},2900,{width:949,height:2862},'');
   const timeline = [
@@ -177,7 +190,7 @@ test('Calliope retains its brand and staged publish control in the migrated stud
   assert.match(app, /CALLIOPE \/\/ SPEAK \+ DRAW/);
   assert.match(app, /\/api\/publish/);
   assert.match(app, /PUBLISH/);
-  assert.match(app, /disabled=\{busy\|\|!publishEnabled\}/);
+  assert.match(app, /\{#if publishEnabled\}<Button id="btnPublish" disabled=\{busy\}/);
   assert.match(app, /REVIEW ONLY/);
   assert.match(app, /ack\.agent_message/);
   assert.match(app, /AGENT SKETCH CONTEXT/);

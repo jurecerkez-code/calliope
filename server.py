@@ -265,13 +265,7 @@ def agent_sketch_message(item: dict) -> str:
                    f"{target}; touched {touched}. "
                    "Shape is an estimate, not the user's intent.")
     if len(paths) > 1:
-        description += (f" One mark made of {len(paths)} ordered original paths, not separate commands. "
-                        f"Stroke JSON: {json.dumps(paths, separators=(',', ':'))}")
-    elif shape in ('freehand', 'unknown'):
-        description += (f" Geometry fallback: <svg viewBox=\"{first['viewBox']}\" "
-                        f"data-coordinate-space=\"{first['coordinate_space']}\">"
-                        f"<path d=\"{first['path']}\" fill=\"none\" /></svg>; "
-                        f"point-level JSON: {json.dumps(first, separators=(',', ':'))}")
+        description += f" One mark made of {len(paths)} ordered original paths, not separate commands."
     return description
 
 def build_agent_prompt(bundles: list, current_html: str, relations: list | None = None) -> str:
