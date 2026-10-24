@@ -1,6 +1,6 @@
 import { describeSketch } from './shape.js';
 import { bindReferences, classifyIntent, simulateWords, MS_PER_WORD, DEFAULT_WINDOW } from './lib/fusion.js';
-import { adaptMessage } from './lib/reson8.js';
+import { adaptMessage } from './lib/turn-timing.js';
 
 export function makePayload(stroke, t_end, viewport, enclosed_element) {
   const pts = stroke.pts.map(p => Object.freeze({...p, rect: p.rect && Object.freeze({...p.rect})}));
@@ -41,7 +41,7 @@ export function adaptTurn(final, candidate, audioStartMs, nowMs) {
       sameTurnStart && sameWords(text, candidate?.text || '') ? candidate?.words : []
   };
   const timed = audioStartMs != null && (msg.start_ms != null || msg.words?.length > 0);
-  const turn = adaptMessage({...msg, type:'transcript', text}, audioStartMs);
+  const turn = adaptMessage({...msg, type:'turn_end', text}, audioStartMs);
   const tokens = text.split(/\s+/).filter(Boolean);
   if (!timed) {
     turn.endMs = nowMs;
