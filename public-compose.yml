@@ -1,0 +1,36 @@
+name: calliope-public-stream-safe
+services:
+  calliope-public:
+    image: calliope-public:local
+    build:
+      context: .
+      dockerfile: Dockerfile.public
+    container_name: calliope-public
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 100
+    mem_limit: 512m
+    cpus: 1
+    env_file: /opt/calliope-public/providers.env
+    environment:
+      CALLIOPE_PUBLIC_MODE: '1'
+      CALLIOPE_REVIEW_MODE: '1'
+      AGENT_PROVIDER: lyceum
+      CALLIOPE_PUBLIC_BUDGET_DB: /data/budget.sqlite3
+      CALLIOPE_TRACE_DIR: /data/traces
+      STUDIO_ORIGIN: https://calliope.tryapparent.com
+      HTTP_PORT: '8800'
+      AUDIO_PORT: '8801'
+      CALLIOPE_BIND_HOST: 0.0.0.0
+    volumes:
+      - /opt/calliope-public/data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    networks:
+      - presentations_default
+networks:
+  presentations_default:
+    external: true

@@ -366,7 +366,7 @@
     void trace('session_started',{startedAt});
     board=attachBoard(boardEl,{elapsed,onStroke:onCanvasStroke});
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
-      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onEvent:(name,data)=>trace(name,data),onTurnStart:()=>{
+      audio=createAudio(eq,{port:config.audioPort,audioPath:config.audioPath,onLine:addLine,elapsed,onEvent:(name,data)=>trace(name,data),onTurnStart:()=>{
         speechCapture={mode,operation};
       },onTurn:turn=>{
         const origin=speechCapture ?? {mode,operation:'recording'};
