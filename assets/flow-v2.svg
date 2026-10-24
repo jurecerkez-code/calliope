@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420" font-family="ui-monospace, Consolas, monospace">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#37ff8b"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="1198" height="418" rx="16" fill="#060807" stroke="#16302a" stroke-width="2"/>
+  <text x="40" y="52" font-size="24" fill="#c8ffd8">THE LOOP</text>
+  <text x="150" y="52" font-size="14" fill="#6f8f84">one feature that works great, end to end</text>
+
+  <g>
+    <rect x="40" y="100" width="200" height="130" rx="12" fill="#0a0d0c" stroke="#16302a" stroke-width="2"/>
+    <text x="60" y="140" font-size="20" fill="#37ff8b">YOU</text>
+    <text x="60" y="172" font-size="13" fill="#6f8f84">speak while drawing</text>
+    <text x="60" y="194" font-size="13" fill="#6f8f84">directly on the site</text>
+    <text x="60" y="216" font-size="13" fill="#6f8f84">marks know their element</text>
+  </g>
+  <path d="M244 165 H276" stroke="#37ff8b" stroke-width="3" marker-end="url(#a2)"/>
+
+  <g>
+    <rect x="280" y="100" width="200" height="130" rx="12" fill="#0a0d0c" stroke="#16302a" stroke-width="2"/>
+    <text x="300" y="140" font-size="20" fill="#37ff8b">ONE CLOCK</text>
+    <text x="300" y="172" font-size="13" fill="#6f8f84">each word chunk carries</text>
+    <text x="300" y="194" font-size="13" fill="#6f8f84">the sketches of its window</text>
+    <text x="300" y="216" font-size="13" fill="#6f8f84">strokes never cut in half</text>
+  </g>
+  <path d="M484 165 H516" stroke="#37ff8b" stroke-width="3" marker-end="url(#a2)"/>
+
+  <g>
+    <rect x="520" y="100" width="200" height="130" rx="12" fill="#0a0d0c" stroke="#16302a" stroke-width="2"/>
+    <text x="540" y="140" font-size="20" fill="#4cc9f0">RESON8</text>
+    <text x="540" y="172" font-size="13" fill="#6f8f84">ears. live words with</text>
+    <text x="540" y="194" font-size="13" fill="#6f8f84">turn detection + timestamps</text>
+    <text x="540" y="216" font-size="13" fill="#6f8f84">dim = guess, solid = final</text>
+  </g>
+  <path d="M724 165 H756" stroke="#37ff8b" stroke-width="3" marker-end="url(#a2)"/>
+
+  <g>
+    <rect x="760" y="100" width="200" height="130" rx="12" fill="#0a0d0c" stroke="#16302a" stroke-width="2"/>
+    <text x="780" y="140" font-size="20" fill="#ffd166">CLAUDE</text>
+    <text x="780" y="172" font-size="13" fill="#6f8f84">brain. reasons first</text>
+    <text x="780" y="194" font-size="13" fill="#6f8f84">(you see the paragraph)</text>
+    <text x="780" y="216" font-size="13" fill="#6f8f84">then executes new HTML</text>
+  </g>
+  <path d="M964 165 H996" stroke="#37ff8b" stroke-width="3" marker-end="url(#a2)"/>
+
+  <g>
+    <rect x="1000" y="100" width="160" height="130" rx="12" fill="#0a0d0c" stroke="#16302a" stroke-width="2"/>
+    <text x="1020" y="140" font-size="20" fill="#37ff8b">PREVIEW</text>
+    <text x="1020" y="172" font-size="13" fill="#6f8f84">the website</text>
+    <text x="1020" y="194" font-size="13" fill="#6f8f84">changes live</text>
+    <text x="1020" y="216" font-size="13" fill="#6f8f84">keep talking</text>
+  </g>
+
+  <path d="M1080 232 C1080 300, 900 305, 760 305" stroke="#37ff8b" stroke-width="2" stroke-dasharray="7 5" fill="none" marker-end="url(#a2)"/>
+  <g>
+    <rect x="420" y="275" width="330" height="70" rx="12" stroke="#37ff8b" stroke-width="2" stroke-dasharray="7 5" fill="none"/>
+    <text x="442" y="305" font-size="15" fill="#37ff8b">PUBLISH = your explicit call</text>
+    <text x="442" y="328" font-size="12" fill="#6f8f84">staged first, one deploy command, no accidents</text>
+  </g>
+
+  <text x="40" y="392" font-size="14" fill="#6f8f84">chunks are short enough to react fast, long enough to carry context. that is the whole trick.</text>
+</svg>
