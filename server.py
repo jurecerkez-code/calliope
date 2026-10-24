@@ -46,6 +46,8 @@ LYCEUM_KEY = os.environ.get("LYCEUM_API_KEY", "")
 MODEL = os.environ.get("MODEL", "deepseek/deepseek-v4-flash-0731")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-haiku-5-5"
+AGENT_PROVIDER = os.environ.get('AGENT_PROVIDER', 'auto').lower()
+OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '')
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
@@ -532,13 +534,22 @@ def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
                 data=json.dumps(body).encode(),
                 headers={'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01',
                          'content-type': 'application/json'})
-        else:
+        elif provider in ('lyceum', 'openrouter'):
             body = {'model': MODEL, 'max_tokens': 4096, 'reasoning_effort': 'none',
                     'messages': messages, 'tools': [pi_edit_schema()], 'tool_choice': 'auto',
                     'parallel_tool_calls': False}
-            req = urllib.request.Request('https://api.lyceum.technology/openai/v1/chat/completions',
-                data=json.dumps(body).encode(),
-                headers={'Authorization': f'Bearer {LYCEUM_KEY}', 'content-type': 'application/json'})
+            if provider == 'openrouter':
+                body.pop('reasoning_effort')
+                body.update(model='openai/gpt-oss-120b',
+                            provider={'only': ['cerebras'], 'allow_fallbacks': False},
+                            reasoning={'effort': 'low'})
+                url, key = 'https://openrouter.ai/api/v1/chat/completions', OPENROUTER_KEY
+            else:
+                url, key = 'https://api.lyceum.technology/openai/v1/chat/completions', LYCEUM_KEY
+            req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                headers={'Authorization': f'Bearer {key}', 'content-type': 'application/json'})
+        else:
+            raise ValueError('invalid agent provider')
         try:
             with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as response:
                 raw = response.read(MAX_PROVIDER_BYTES + 1)
@@ -602,7 +613,12 @@ def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
                 {'type': 'tool_result', 'tool_use_id': entry['tool_call_id'],
                  'content': entry['content']} for entry in results]})
         else:
-            messages.append({'role': 'assistant', 'content': content, 'tool_calls': calls})
+            assistant = {'role': 'assistant', 'content': content, 'tool_calls': calls}
+            if provider == 'openrouter':
+                for field in ('reasoning', 'reasoning_details'):
+                    if field in message:
+                        assistant[field] = message[field]
+            messages.append(assistant)
             messages.extend(results)
     raise ProviderAnswerError('Agent exceeded three model/tool rounds; edits discarded')
 
@@ -615,6 +631,10 @@ def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None,
 def claude_apply(bundles: list, current_html: str, prompt: str | None = None,
                  on_response=None) -> dict:
     return agent_apply(bundles, current_html, prompt, on_response, 'claude')
+
+def openrouter_apply(bundles: list, current_html: str, prompt: str | None = None,
+                     on_response=None) -> dict:
+    return agent_apply(bundles, current_html, prompt, on_response, 'openrouter')
 
 
 # ---------- HTTP ----------
@@ -797,13 +817,19 @@ class Handler(BaseHTTPRequestHandler):
                 trace_event(session_id, 'apply_requested', {'request_id': request_id,
                     'bundles': bundles, 'relations': payload.get('relations', []),
                     'current_html': html, 'prompt': prompt})
-                if not ANTHROPIC_KEY and not LYCEUM_KEY:
+                provider = ('claude' if ANTHROPIC_KEY else 'lyceum') if AGENT_PROVIDER == 'auto' else AGENT_PROVIDER
+                if provider not in ('claude', 'lyceum', 'openrouter'):
+                    return self._send(400, {'error': 'invalid AGENT_PROVIDER'})
+                key = {'claude': ANTHROPIC_KEY, 'lyceum': LYCEUM_KEY,
+                       'openrouter': OPENROUTER_KEY}[provider]
+                if not key:
                     trace_event(session_id, 'apply_result', {'request_id': request_id,
                         'status': 'not_sent', 'error': 'agent key unavailable'})
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured',
                                             'agent_message': prompt})
                 agent_attempted = True
-                out = (claude_apply if ANTHROPIC_KEY else lyceum_apply)(bundles, html, prompt=prompt,
+                out = {'claude': claude_apply, 'lyceum': lyceum_apply,
+                       'openrouter': openrouter_apply}[provider](bundles, html, prompt=prompt,
                     on_response=lambda response: trace_event(session_id, 'provider_response',
                         {'request_id': request_id, 'response': response}))
                 trace_event(session_id, 'apply_result', {'request_id': request_id,
@@ -883,7 +909,7 @@ async def _relay(websocket):
 async def main():
     threading.Thread(target=run_http, daemon=True).start()
     print(f"UI on http://127.0.0.1:{HTTP_PORT}  audio ws on :{AUDIO_PORT}")
-    provider = 'Claude' if ANTHROPIC_KEY else 'Lyceum' if LYCEUM_KEY else 'unavailable'
+    provider = ('Claude' if ANTHROPIC_KEY else 'Lyceum' if LYCEUM_KEY else 'unavailable') if AGENT_PROVIDER == 'auto' else AGENT_PROVIDER
     print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  Agent: {provider}")
     async with websockets.serve(audio_ws, "127.0.0.1", AUDIO_PORT, max_size=None):
         await asyncio.Future()
