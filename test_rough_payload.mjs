@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makePayload } from './src/timeline.js';
 import { describeSketch } from './src/shape.js';
+import { makeMark } from './src/marks.js';
 
 // Synthetic rough marks, not point samples extracted from a screenshot.
 function oval(gap = 0, overshoot = 0) {
@@ -57,7 +58,6 @@ for (const [name, points, shape] of [
   assert.match(describeSketch(result).text, new RegExp(`${shape.toUpperCase()} drawn at .* around button#Inner$`));
 });
 for (const [name, points] of [
-  ['long line', Array.from({ length: 35 }, (_, i) => ({ x: 10 + i * 8, y: 35 + Math.sin(i) * 2 }))],
   ['L mark', [[10, 10], [10, 80], [115, 80]]],
   ['U mark', [[10, 10], [10, 75], [30, 86], [95, 86], [115, 75], [115, 10]]],
   ['missing box side', [[20, 20], [135, 20], [135, 90], [20, 90]]],
@@ -72,4 +72,24 @@ for (const [name, points] of [
   const result = payload(pts);
   assert.equal(result.shape, 'freehand');
   assert.equal(result.enclosed_element, '');
+});
+for (const [name, from, to, direction, angle] of [
+  ['horizontal', [10, 40], [210, 40], 'horizontal', 0],
+  ['vertical', [40, 210], [40, 10], 'vertical', 90],
+  ['rising', [10, 210], [210, 10], 'bottom-left to top-right', 45],
+  ['falling', [210, 210], [10, 10], 'top-left to bottom-right', -45],
+]) test(`line payload: ${name}`, () => {
+  const points = Array.from({length: 25}, (_, i) => {
+    const t = i / 24;
+    return {x: from[0] + (to[0] - from[0]) * t, y: from[1] + (to[1] - from[1]) * t + (i === 0 || i === 24 ? 0 : 1.5 * Math.sin(i * 2))};
+  });
+  const result = payload(points);
+  assert.equal(result.shape, 'line');
+  assert.equal(result.direction, direction);
+  assert.ok(Math.abs(result.angle_deg - angle) < 2, `${result.angle_deg} vs ${angle}`);
+  assert.equal(result.enclosed_element, '');
+  const mark = makeMark([result]);
+  assert.equal(mark.angle_deg, result.angle_deg);
+  assert.equal(mark.direction, direction);
+  assert.match(describeSketch(result).text, new RegExp(`LINE ${direction} .*angle .* over button#outer$`));
 });

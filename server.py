@@ -57,7 +57,37 @@ def valid_stroke(s):
         return False
     if s.get('tool') != 'pen' or not isinstance(s.get('pts'), list) or not 1 <= len(s['pts']) <= 3000:
         return False
-    if 'shape' in s and s['shape'] not in ('circle', 'square', 'triangle', 'freehand'):
+    if 'shape' in s and s['shape'] not in ('circle', 'square', 'triangle', 'freehand', 'line'):
+        return False
+    if s.get('shape') == 'line':
+        angle = s.get('angle_deg')
+        if isinstance(angle, bool) or not isinstance(angle, (int, float)) or not math.isfinite(angle) or not -90 <= angle <= 90:
+            return False
+        direction = ('horizontal' if abs(angle) <= 12 else 'vertical' if abs(angle) >= 78
+                     else 'bottom-left to top-right' if angle > 0 else 'top-left to bottom-right')
+        if s.get('direction') != direction:
+            return False
+        if len(s['pts']) < 2:
+            return False
+        start, end = s['pts'][0], s['pts'][-1]
+        if not all(isinstance(p, dict) and all(isinstance(p.get(k), (int, float)) and
+                   math.isfinite(p[k]) for k in ('x', 'y')) for p in (start, end)):
+            return False
+        dx, dy = end['x'] - start['x'], end['y'] - start['y']
+        rise = abs(dy) if dx == 0 else dy if dx < 0 else -dy
+        expected = math.degrees(math.atan2(rise, abs(dx)))
+        span = math.hypot(dx, dy)
+        if span < 28 or abs(angle - expected) > 0.051:
+            return False
+        points = s['pts']
+        if not all(isinstance(p, dict) and all(isinstance(p.get(k), (int, float)) and
+                   math.isfinite(p[k]) for k in ('x', 'y')) for p in points):
+            return False
+        length = sum(math.hypot(b['x'] - a['x'], b['y'] - a['y']) for a, b in zip(points, points[1:]))
+        deviation = max(abs(dx * (p['y'] - start['y']) - dy * (p['x'] - start['x'])) / span for p in points)
+        if length > span * 1.18 or deviation > max(4, span * 0.06):
+            return False
+    elif 'angle_deg' in s or 'direction' in s:
         return False
     if 'enclosed_element' in s and (not isinstance(s['enclosed_element'], str) or len(s['enclosed_element']) > 200 or any(ord(c) < 32 for c in s['enclosed_element'])):
         return False
@@ -102,7 +132,10 @@ def valid_mark(mark):
     if mark.get('id') != strokes[0]['id'] or mark.get('t') != strokes[0].get('t') or mark.get('t_end') != strokes[-1].get('t_end'):
         return False
     if len(strokes) == 1:
-        return mark.get('shape') == strokes[0].get('shape') and mark.get('enclosed_element') == strokes[0].get('enclosed_element')
+        return (mark.get('shape') == strokes[0].get('shape') and
+                mark.get('enclosed_element') == strokes[0].get('enclosed_element') and
+                mark.get('angle_deg') == strokes[0].get('angle_deg') and
+                mark.get('direction') == strokes[0].get('direction'))
     return (mark.get('shape') == 'x' and mark.get('enclosed_element') == ''
             and all(s['tool'] == 'pen' for s in strokes)
             and strokes[0]['viewBox'] == strokes[1]['viewBox'])
@@ -256,6 +289,8 @@ def agent_sketch_message(item: dict) -> str:
     shape = item.get('shape', first.get('shape', 'unknown'))
     name = {'freehand': 'Freehand mark', 'circle': 'Circle',
             'square': 'Square', 'triangle': 'Triangle', 'x': 'X (tentative)'}.get(shape, 'Sketch')
+    if shape == 'line':
+        name = f"Line {first['direction']} (angle {first['angle_deg']}°, positive rises right)"
     touched = ', '.join(dict.fromkeys(element for path in paths for element in path.get('elements', []))) or 'background'
     center = item.get('enclosed_element', first.get('enclosed_element', ''))
     target = f"around {center}" if shape in ('circle', 'square', 'triangle') and center else f"over {touched}"

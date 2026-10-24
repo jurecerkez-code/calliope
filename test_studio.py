@@ -72,6 +72,41 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(readback['stroke'], stroke)
 
+    def test_line_angle_survives_receipt_readback_and_prompt(self):
+        stroke = self.stroke()
+        stroke.update(id='line-example', shape='line', angle_deg=45,
+                      direction='bottom-left to top-right', enclosed_element='',
+                      pts=[dict(stroke['pts'][0], x=x, y=y) for x, y in
+                           [(10, 110), (35, 85), (60, 60), (85, 35), (110, 10)]],
+                      bbox={'x': 10, 'y': 10, 'width': 100, 'height': 100},
+                      path='M 10 110 L 35 85 L 60 60 L 85 35 L 110 10')
+        mark = {'id': stroke['id'], 'shape': 'line', 't': 10, 't_end': 20,
+                'angle_deg': 45, 'direction': 'bottom-left to top-right',
+                'enclosed_element': '', 'strokes': [stroke]}
+        code, receipt = self.post('/api/marks', mark)
+        self.assertEqual(code, 201)
+        self.assertIn('Line bottom-left to top-right (angle 45°', receipt['agent_message'])
+        self.assertNotIn('point-level JSON', receipt['agent_message'])
+        code, readback = self.post('/api/marks/readback', {'id': mark['id']})
+        self.assertEqual(code, 200)
+        self.assertEqual(readback['mark'], mark)
+        self.assertIn(receipt['agent_message'], server.build_agent_prompt(
+            [{'transcript': 'align this', 'strokes': [mark]}], '<html></html>'))
+        forged = {**mark, 'angle_deg': -45, 'direction': 'top-left to bottom-right',
+                  'strokes': [{**stroke, 'angle_deg': -45,
+                               'direction': 'top-left to bottom-right'}]}
+        forged['id'] = 'forged-line'
+        forged['strokes'][0]['id'] = 'forged-line'
+        self.assertEqual(self.post('/api/marks', forged)[0], 400)
+        bent = {**mark, 'id': 'bent-line', 'strokes': [{**stroke, 'id': 'bent-line',
+                 'pts': [dict(stroke['pts'][0], x=x, y=y) for x, y in
+                         [(10, 110), (110, 110), (110, 10)]],
+                 'path': 'M 10 110 L 110 110 L 110 10'}]}
+        self.assertEqual(self.post('/api/marks', bent)[0], 400)
+        self.assertNotIn('bent-line', server.MARKS)
+        mark['angle_deg'] = 999
+        self.assertEqual(self.post('/api/marks', mark)[0], 400)
+
     def test_arrow_relations_require_accepted_current_marks_and_exact_geometry(self):
         circle = self.stroke()
         arrow = {**self.stroke(), 'id': 'arrow', 't': 30, 't_end': 40,
