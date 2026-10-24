@@ -24,7 +24,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 
 | | |
 |---|---|
-| **Jure Cerkez** | M.Sc. Technology & Management, Fall 2025 |
+| Jure Cerkez | M.Sc. Technology & Management, Fall 2025 |
 | Ahmed Sohail | M.Sc. Technology & Management (Apollo11), Fall 2025 |
 | Gonçalo de Deus | M.Sc. Technology & Management, Fall 2025 |
 | Pascal Finn Krebs | M.Sc. Technology & Management, #district13 |
