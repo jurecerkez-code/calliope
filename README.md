@@ -2,10 +2,6 @@
   <img src="assets/banner.png" alt="CALLIOPE header" width="900">
 </p>
 
-<p align="center">
-  <img src="assets/hero-v2.svg" alt="CALLIOPE: speak + draw on the website, it changes live" width="900">
-</p>
-
 <h1 align="center">calliope</h1>
 
 <p align="center">
@@ -15,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/hackathon-Jamie%20Agentic%20AI%20Hack-37ff8b" alt="hackathon">
   <img src="https://img.shields.io/badge/voice-Reson8%20turns-4cc9f0" alt="voice">
-  <img src="https://img.shields.io/badge/brain-Lyceum%20DeepSeek%20V4%20Flash-ffd166" alt="brain">
+  <img src="https://img.shields.io/badge/brain-Anthropic%20Claude-ffd166" alt="brain">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="python">
 </p>
@@ -28,7 +24,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 
 | | |
 |---|---|
-| **Jure Cerkez** | M.Sc. Technology & Management, Fall 2025 |
+| Jure Cerkez | M.Sc. Technology & Management, Fall 2025 |
 | Ahmed Sohail | M.Sc. Technology & Management (Apollo11), Fall 2025 |
 | Gonçalo de Deus | M.Sc. Technology & Management, Fall 2025 |
 | Pascal Finn Krebs | M.Sc. Technology & Management, #district13 |
@@ -41,7 +37,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 3. **The agent changes the preview in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It returns updated HTML; no written reasoning is required. Recording mode saves the same voice-and-mark timeline without calling the agent.
 
 <p align="center">
-  <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Lyceum, preview" width="900">
+  <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Claude, preview" width="900">
 </p>
 
 ## Blank canvas mode
@@ -110,20 +106,20 @@ The story of the build, in order, because the path is part of the answer.
 | Part | Technology | Why |
 |---|---|---|
 | Ears | **Reson8** speech to text, turns endpoint (API client: `calliope`) | Server side turn detection with timestamps, fast enough to react mid-meeting. Audio goes 16 kHz mono PCM through a small local relay so the API key never reaches the browser. |
-| Brain | **Claude Haiku via Anthropic**, **DeepSeek V4 Flash via Lyceum**, or **gpt-oss-120b via OpenRouter/Cerebras** | Uses spoken intent, drawing geometry, and target elements to call Pi's exact edit tool; the server returns validated HTML. |
+| Brain | **Claude API (Anthropic)**, Haiku for speed | Uses spoken intent, drawing geometry, and target elements to call Pi's exact edit tool; the server returns validated HTML. |
 
 ## Run it
 
 Requirements: Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), Node.js with npm, and Chrome. The microphone needs a secure browser origin (localhost counts) and a reachable WebSocket audio relay.
 
 ```bash
-cp .env.example .env   # fill in RESON8_API_KEY and either ANTHROPIC_API_KEY or LYCEUM_API_KEY
+cp .env.example .env   # fill in RESON8_API_KEY and ANTHROPIC_API_KEY
 npm ci
 npm run build
 uv run server.py
 ```
 
-With `AGENT_PROVIDER=auto` (the default), Calliope selects Anthropic when its key is set, otherwise Lyceum. To use OpenRouter, set `AGENT_PROVIDER=openrouter` and `OPENROUTER_API_KEY` in `.env`, then restart the server. This pins `openai/gpt-oss-120b` to Cerebras only, with low reasoning effort; it does not fall back to another OpenRouter host or another key. `MODEL` only applies to Lyceum. Never commit `.env`. Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL (or leave it empty to import **https://www.meetjamie.ai/**) or **START BLANK CANVAS**; no page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live applies completed speech turns automatically; contextual actions send sketches or speech alone and retry agent calls. Without the selected agent key, drawing works but agent calls report unavailable. Live marks are sent to the backend; failed deliveries can be retried, and an apply refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test/test_studio.py` run the local checks.
+With `AGENT_PROVIDER=auto` (the default), Calliope uses Anthropic (Claude). To use OpenRouter, set `AGENT_PROVIDER=openrouter` and `OPENROUTER_API_KEY` in `.env`, then restart the server. This pins `openai/gpt-oss-120b` to Cerebras only, with low reasoning effort; it does not fall back to another OpenRouter host or another key. `MODEL` sets the Claude model. Never commit `.env`. Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL (or leave it empty to import **https://www.meetjamie.ai/**) or **START BLANK CANVAS**; no page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live applies completed speech turns automatically; contextual actions send sketches or speech alone and retry agent calls. Without the selected agent key, drawing works but agent calls report unavailable. Live marks are sent to the backend; failed deliveries can be retried, and an apply refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test/test_studio.py` run the local checks.
 
 ### Session diagnostic trace
 
@@ -152,11 +148,11 @@ To use another website as the studio canvas, paste its public URL in **Website U
 
 ## Status
 
-**Targeted APPLY:** `server.py` selects Claude then Lyceum by available key in auto mode, or the provider named by `AGENT_PROVIDER`. All three paths advertise only the published `@earendil-works/pi-coding-agent` 1.4.0 `createEditTool`, via Pi's actual schema and an in-memory adapter for virtual `index.html`. The model treats page HTML as untrusted document data and sends small edit calls rather than the whole updated page. The adapter receives no API credentials or general filesystem tools; this is a restricted tool interface, not an OS sandbox. Python validates the complete result and returns `{reasoning, html, agent_message}` only after the edit loop finishes. Errors return no HTML, keeping the preview and pending turn available for retry.
+**Targeted APPLY:** `server.py` selects Claude, or the provider named by `AGENT_PROVIDER`. All three paths advertise only the published `@earendil-works/pi-coding-agent` 1.4.0 `createEditTool`, via Pi's actual schema and an in-memory adapter for virtual `index.html`. The model treats page HTML as untrusted document data and sends small edit calls rather than the whole updated page. The adapter receives no API credentials or general filesystem tools; this is a restricted tool interface, not an OS sandbox. Python validates the complete result and returns `{reasoning, html, agent_message}` only after the edit loop finishes. Errors return no HTML, keeping the preview and pending turn available for retry.
 
-The document limit is 200,000 UTF-8 bytes. Each turn allows at most three model responses, 4,096 output tokens per response, eight tool calls per round, and sixteen exact replacements per call. Duplicate/missing spans, wrong paths, collateral changes, partial documents, and unfinished responses fail closed. A final explanation is optional. Tests cover rollback and protocol failures; a synthetic live Lyceum call succeeded before this integration. A larger imported-page probe changed HTML but not exactly as requested. Claude tool use and real voice-to-browser quality remain unverified against live APIs. `npm audit` reports a high and moderate finding through Pi's pinned `undici` dependency; this adapter does not use its HTTP client.
+The document limit is 200,000 UTF-8 bytes. Each turn allows at most three model responses, 4,096 output tokens per response, eight tool calls per round, and sixteen exact replacements per call. Duplicate/missing spans, wrong paths, collateral changes, partial documents, and unfinished responses fail closed. A final explanation is optional. Tests cover rollback and protocol failures. A larger imported-page probe changed HTML but not exactly as requested. Claude tool use and real voice-to-browser quality remain unverified against live APIs. `npm audit` reports a high and moderate finding through Pi's pinned `undici` dependency; this adapter does not use its HTTP client.
 
-**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, and Anthropic Claude, Lyceum DeepSeek, or OpenRouter/Cerebras targeted APPLY support. Provider selection and response handling are covered by mocked HTTP tests; live Anthropic and OpenRouter requests have not been verified. Typed instructions changed the preview in the isolated test deployment; the current Live voice-to-APPLY flow has not been verified end to end. The retired Chrome extension and classic page are no longer part of the app.
+**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, and Anthropic Claude targeted APPLY support. Provider selection and response handling are covered by mocked HTTP tests; live Anthropic and OpenRouter requests have not been verified. Typed instructions changed the preview in the isolated test deployment; the current Live voice-to-APPLY flow has not been verified end to end. The retired Chrome extension and classic page are no longer part of the app.
 
 **Not yet built:** identifying the individual printed word inside an element such as `h1` when circled. Current targeting reports the DOM element; word-range geometry needs its own implementation and browser checks. Shape fixtures are synthetic, so test real hand-drawn traces before treating a tentative label as reliable.
 
