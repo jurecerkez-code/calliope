@@ -1,15 +1,14 @@
-import { adaptMessage } from '../extension/lib/reson8.js';
+// Audio is an optional secure-origin input; turn_end commits transcript events with
+// real audio timing (Reson8 start_ms / words) so marks and words share one clock.
+import { adaptTurn } from './timeline.js';
 
-// Audio is an optional secure-origin input; only turn_end commits transcript events.
-// onTurn receives {text, startMs, endMs, words:[{text,startMs,endMs}]} on the session
-// clock. Times come from the last turn_end_candidate (start_ms, duration_ms, words);
-// they are null when Reson8 sent no timestamps.
-export function createAudio(canvas, {port, onLine, onTurn, elapsed = () => 0}) {
+export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, onEvent, elapsed}) {
   const ctx = canvas.getContext('2d');
   let ws=null, audioCtx=null, analyser=null, stream=null, frame=0;
   let audioStartMs=null, lastCandidate=null; // session time of the first sample Reson8 got
   // A rolling amplitude trace, newest on the right, mirrored around a dotted baseline.
   const history=[];
+  const now = () => (typeof elapsed === 'function' ? elapsed() : Math.round(performance.now()));
   function draw() {
     frame=requestAnimationFrame(draw);
     const W=canvas.clientWidth||200, H=canvas.clientHeight||44, dpr=window.devicePixelRatio||1;
@@ -34,11 +33,13 @@ export function createAudio(canvas, {port, onLine, onTurn, elapsed = () => 0}) {
     });
   }
   draw();
-  function timedTurn(msg){
-    if(msg.start_ms==null||audioStartMs===null) return {text:msg.text,startMs:null,endMs:null,words:[]};
-    // turns and realtime share the timing fields, so the realtime adapter applies
-    const t=adaptMessage({...msg,type:'transcript'},audioStartMs);
-    return {text:t.text,startMs:t.startMs,endMs:t.endMs,words:t.words};
+  function commit(msg){
+    const text=(msg.text||lastCandidate?.text||'').trim();
+    if(!text){ onEvent?.('turn_empty',{elapsedMs:now()});lastCandidate=null; return; }
+    const utt=adaptTurn({...msg,text},lastCandidate,audioStartMs,now());
+    lastCandidate=null;
+    onTurn(utt);
+    onLine('fin',text);
   }
   return {
     async start() {
@@ -53,27 +54,20 @@ export function createAudio(canvas, {port, onLine, onTurn, elapsed = () => 0}) {
         ws.binaryType='arraybuffer';
         ws.onmessage=ev=>{
           const msg=JSON.parse(ev.data);
-          if(msg.error){onLine('err','ERROR: '+msg.error);return;}
+          if(msg.error){onEvent?.('mic_error',{error:msg.error});onLine('err','ERROR: '+msg.error);return;}
           const type=msg.type||'',text=msg.text||'';
-          if(type==='turn_end_candidate'){if(text){lastCandidate=msg;onLine('inter',text);}return;}
-          if(type==='turn_end'){
-            const cand=lastCandidate||{}, finalText=text||cand.text||'';
-            lastCandidate=null;
-            if(finalText){onTurn(timedTurn({...cand,text:finalText}));onLine('fin',finalText);}
-            return;
-          }
-          if(type==='turn_start'){onLine('inter','(listening)');return;}
+          if(type==='turn_end_candidate'){if(text){lastCandidate=msg;onEvent?.('turn_candidate',{text,start_ms:msg.start_ms,duration_ms:msg.duration_ms,words:msg.words});onLine('inter',text);}return;}
+          if(type==='turn_end'){commit(msg);return;}
+          if(type==='turn_start'){lastCandidate=null;onEvent?.('turn_start',{elapsedMs:now()});onTurnStart?.();onLine('inter','(listening)');return;}
           if(text) onLine('inter',text);
         };
-        ws.onopen=()=>{audioStartMs=null;onLine('fin','RESON8 LINK UP (calliope). SPEAK.');};
-        ws.onerror=()=>onLine('err','AUDIO CONNECTION FAILED');
+        ws.onopen=()=>{audioStartMs=null;lastCandidate=null;onLine('fin','RESON8 LINK UP (calliope). SPEAK.');};
+        ws.onerror=()=>{onEvent?.('mic_error',{error:'audio connection failed'});onLine('err','AUDIO CONNECTION FAILED');};
         proc.onaudioprocess=e=>{
           if(ws?.readyState!==1)return;
           const f=e.inputBuffer.getChannelData(0),rate=audioCtx.sampleRate||16000;
           const n=rate===16000?f.length:Math.floor(f.length*16000/rate);
-          // Reson8 times count from the first sample it receives; this frame holds n
-          // samples captured before now. Approximate: latency before it is not measured.
-          if(audioStartMs===null) audioStartMs=elapsed()-n/16;
+          if(audioStartMs===null) audioStartMs=now()-n/16; // frame duration at 16 kHz
           const buf=new ArrayBuffer(n*2),dv=new DataView(buf);
           for(let i=0;i<n;i++){
             const s=rate===16000?f[i]:f[Math.floor(i*rate/16000)];
@@ -84,7 +78,7 @@ export function createAudio(canvas, {port, onLine, onTurn, elapsed = () => 0}) {
         src.connect(proc);proc.connect(audioCtx.destination);
       } catch(err) { this.stop(); throw err; }
     },
-    stop(){ws?.close();ws=null;analyser=null;stream?.getTracks().forEach(t=>t.stop());stream=null;audioCtx?.close();audioCtx=null;},
+    stop(){ws?.close();ws=null;analyser=null;lastCandidate=null;audioStartMs=null;stream?.getTracks().forEach(t=>t.stop());stream=null;audioCtx?.close();audioCtx=null;},
     destroy(){this.stop();cancelAnimationFrame(frame);}
   };
 }

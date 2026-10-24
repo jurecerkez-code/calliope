@@ -3,9 +3,8 @@
 // "this is the API gateway" said while (or just after) drawing names the node.
 // Pure functions over plain data; no DOM.
 
-import { buildTimeline, fuse } from "../extension/lib/fusion.js";
-import { classifyShape, makeStroke } from "../extension/lib/strokes.js";
-import { recognizeShape } from "./shape-recognition.js";
+import { buildTimeline, fuse } from "./lib/fusion.js";
+import { classifyShape, makeStroke, pathLength } from "./lib/strokes.js";
 
 const NEAR = 28; // px around a node that still counts as touching it
 const SMALL = 40; // strokes up to this size near an edge end are arrowheads
@@ -45,9 +44,7 @@ function tipOf(points) {
 	);
 }
 
-// The one rule for "this stroke connects that to that", shared by BLANK CANVAS and
-// WEBSITE mode: the stroke's first point picks the node it starts from, its tip
-// picks the node it goes to. nodes: [{bbox:{x,y,w,h}}]. Either end can be null.
+// Both ends are resolved against marks already present when the arrow is drawn.
 export function connect(nodes, points) {
 	const tip = tipOf(points);
 	return { from: nodeAt(nodes, points[0]), to: nodeAt(nodes, tip), tip };
@@ -57,12 +54,7 @@ export function connect(nodes, points) {
 export function classifyStrokes(strokes) {
 	return strokes.map((s) => {
 		const rec = { ...makeStroke(s.id, s.points), tool: s.tool || "pen" };
-		const recognised = recognizeShape(s.points).shape;
-		rec.kind =
-			NODE_SHAPES[recognised] ||
-			(rec.tool === "pen" && rec.shape === "closed-loop"
-				? "blob"
-				: rec.shape);
+		rec.kind = rec.tool === "pen" ? NODE_SHAPES[rec.shape] || rec.shape : "highlight";
 		rec.tip = tipOf(rec.points);
 		return rec;
 	});
@@ -142,7 +134,7 @@ export function buildDiagram(strokes, utterances) {
 	const owner = {}; // strokeId -> {type, item}
 
 	for (const r of recs) {
-		if (["box", "circle", "triangle", "blob"].includes(r.kind)) {
+		if (["box", "circle", "triangle"].includes(r.kind)) {
 			const n = {
 				id: `N${nodes.length + 1}`,
 				shape: r.kind,
@@ -156,10 +148,18 @@ export function buildDiagram(strokes, utterances) {
 		}
 	}
 	// Edges first, so small marks next to an edge's tip can be read as its arrowhead.
-	for (const r of recs) {
-		if (owner[r.id] || diag(r.bbox) <= SMALL)
+	for (const [i, r] of recs.entries()) {
+		if (owner[r.id] || r.kind === "highlight" || diag(r.bbox) <= SMALL)
 			continue;
-		const { from, to } = connect(nodes, r.points);
+		// Curved arrows may be freehand, but a loop crossing two nodes is not an edge.
+		// Measure the original path: simplification can hide dense detours.
+		const rawPoints = strokes[i].points;
+		const start = rawPoints[0], end = rawPoints.at(-1);
+		if (r.kind !== "line" &&
+			Math.hypot(end.x - start.x, end.y - start.y) < pathLength(rawPoints) * 0.6)
+			continue;
+		const from = nodeAt(nodes, r.points[0]);
+		const to = nodeAt(nodes, r.tip);
 		if (from && to && from !== to) {
 			const e = {
 				id: `E${edges.length + 1}`,
@@ -203,7 +203,7 @@ export function buildDiagram(strokes, utterances) {
 		owner[r.id] = { type: "annotation", item: a };
 	}
 
-	// Speech: bind pointing words to strokes by time (extension/lib/fusion.js), then
+	// Speech: bind pointing words to strokes by time (src/lib/fusion.js), then
 	// read names from the words that follow.
 	const fused = fuse(
 		utterances.filter((u) => u.final !== false && u.text),
@@ -235,7 +235,6 @@ const MERMAID_SHAPE = {
 	box: (l) => `[${l}]`,
 	circle: (l) => `((${l}))`,
 	triangle: (l) => `{${l}}`,
-	blob: (l) => `(${l})`,
 };
 
 export function toMermaid({ nodes, edges }) {
@@ -303,32 +302,31 @@ export function canvasPacketText(packet) {
 	].join("\n");
 }
 
-// ---------- WEBSITE mode: marks on the page and arrows between them ----------
-// A circle/square/triangle or any other closed loop marks a DOM
-// element ("this"). A pen stroke that starts on a mark is an arrow from it:
-//   move  - its tip lands on the page, not on another mark ("put this there")
-//   link  - its tip lands on another mark ("this goes with that")
-//   point - it starts on no mark but its tip lands on one ("look at this")
-// payloads: website stroke payloads from timeline.js makePayload (pts carry the
-// selector and text of the element under each point).
+// Website mode reads settled marks in drawing order. An arrow cannot acquire
+// a source that was circled later, even if both end up in the same APPLY turn.
 const MARK_SHAPES = new Set(["circle", "square", "triangle"]);
 
-export function websiteRelations(payloads) {
+export function isWebsiteMark(item) {
+	const p = item.strokes ? item.strokes[0] : item;
+	return item.shape !== "x" && (MARK_SHAPES.has(p.shape) ||
+		p.tool === "highlighter" || classifyShape(p.pts.map(q => ({ x: q.x, y: q.y }))) === "closed-loop");
+}
+
+export function websiteRelations(items) {
 	const marks = [];
 	const relations = [];
-	for (const p of payloads) {
-		const points = p.pts.map((q) => ({ x: q.x, y: q.y }));
+	for (const item of items) {
+		const p = item.strokes ? item.strokes[0] : item;
+		if (item.shape === "x") continue;
 		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
 		const target = (MARK_SHAPES.has(p.shape) && p.enclosed_element) || p.elements?.[0] || "";
-		if (MARK_SHAPES.has(p.shape) || classifyShape(points) === "closed-loop") {
-			marks.push({ id: p.id, bbox, target, shape: p.shape });
+		if (isWebsiteMark(item)) {
+			marks.push({ id: p.id, bbox, target });
 		} else if (p.tool === "pen" && diag(bbox) > SMALL) {
 			const { from, to, tip } = connect(marks, p.pts);
-			if (!from && !to) continue;
-			if (from && to === from) continue; // a stroke inside one mark is not an arrow
-			const kind = from && to ? "link" : from ? "move" : "point";
+			if ((!from && !to) || (from && from === to)) continue;
 			relations.push({
-				kind,
+				kind: from && to ? "link" : from ? "move" : "point",
 				arrow: p.id,
 				from: from ? { stroke: from.id, target: from.target } : null,
 				to: to
@@ -340,7 +338,6 @@ export function websiteRelations(payloads) {
 	return relations;
 }
 
-// One readable line per relation, for the log.
 export function describeRelation(r) {
 	const at = `(${Math.round(r.to.x)}, ${Math.round(r.to.y)})`;
 	if (r.kind === "move") return `ARROW: MOVE ${r.from.target || "MARKED AREA"} → ${at}${r.to.target ? " ON " + r.to.target : ""}`;

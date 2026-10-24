@@ -47,10 +47,35 @@ function trimTail(points, perimeter, gap) {
   return closest < gap * 0.55 ? points.slice(0, cut + 1) : points;
 }
 
+function recognizeLine(points) {
+  const start = points[0], end = points.at(-1);
+  const dx = end.x - start.x, dy = end.y - start.y;
+  const span = Math.hypot(dx, dy);
+  if (span < 28) return null;
+  let length = 0, deviation = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += distance(points[i - 1], points[i]);
+    deviation = Math.max(deviation, Math.abs(dx * (points[i].y - start.y) - dy * (points[i].x - start.x)) / span);
+  }
+  if (length > span * 1.18 || deviation > Math.max(4, span * 0.06)) return null;
+  // Canonicalize left-to-right so reversing the drawing gesture keeps the angle.
+  // Screen y grows down; positive angles rise toward the right.
+  const rise = dx === 0 ? Math.abs(dy) : dx < 0 ? dy : -dy;
+  const run = Math.abs(dx);
+  const angle_deg = Math.round(Math.atan2(rise, run) * 180 / Math.PI * 10) / 10;
+  const direction = Math.abs(angle_deg) <= 12 ? 'horizontal'
+    : Math.abs(angle_deg) >= 78 ? 'vertical'
+    : angle_deg > 0 ? 'bottom-left to top-right' : 'top-left to bottom-right';
+  return { shape: 'line', confidence: Math.max(0, 1 - deviation / span - (length / span - 1)), angle_deg, direction };
+}
+
 export function recognizeShape(points) {
-  if (!Array.isArray(points) || points.length < 8 ||
+  if (!Array.isArray(points) || points.length < 2 ||
       points.some(p => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return freehand();
   const input = points.map(p => ({ x: p.x, y: p.y }));
+  const line = recognizeLine(input);
+  if (line) return line;
+  if (input.length < 8) return freehand();
   const xs = input.map(p => p.x), ys = input.map(p => p.y);
   const width = Math.max(...xs) - Math.min(...xs);
   const height = Math.max(...ys) - Math.min(...ys);

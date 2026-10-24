@@ -5,3 +5,4 @@ __pycache__/
 speech.mp3
 node_modules/
 dist/
+traces/

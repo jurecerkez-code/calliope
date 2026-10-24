@@ -3,18 +3,25 @@
   import './loader.css';
   let visible = $state(true);
   let fading = $state(false);
+  let progress = $state(8);
+  const advance = to => { progress = Math.max(progress, to); };
   function finish() {
     if (fading) return;
     fading = true;
     setTimeout(() => visible = false, 700);
   }
   onMount(() => {
-    const auto = setTimeout(finish, 2600);
+    const fallback = setTimeout(finish, 4500);
+    const startedAt = performance.now();
+    const barTimer = setInterval(() => {
+      const t = Math.min(1, (performance.now() - startedAt) / 4500);
+      advance(Math.min(100, 8 + 92 * (1 - (1 - t) * (1 - t))));
+    }, 120);
     const onKey = event => {
       if (['Enter', ' ', 'Escape'].includes(event.key)) finish();
     };
     window.addEventListener('keydown', onKey);
-    return () => { clearTimeout(auto); window.removeEventListener('keydown', onKey); };
+    return () => { clearTimeout(fallback); clearInterval(barTimer); window.removeEventListener('keydown', onKey); };
   });
 </script>
 
@@ -31,6 +38,7 @@
       <p class="vd-sub">a muse for machines.</p>
       <p class="vd-credits">source: reson8 · reasoning: anthropic · {'{Tech: Europe}'}</p>
     </div>
+    <div class="vd-bar" aria-hidden="true"><i style="width:{progress}%"></i></div>
     <p class="vd-skip">click anywhere to skip</p>
   </div>
 {/if}
