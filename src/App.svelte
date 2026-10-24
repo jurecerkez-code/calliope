@@ -4,15 +4,16 @@
   import Button from './components/ui/button/Button.svelte';
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
-  import { buildBundles, canApply, lanes } from './timeline.js';
-  import Lanes from './Lanes.svelte';
+  import { buildBundles, canApply } from './timeline.js';
   import { createMarkQueue, MARK_SETTLE_DELAY_MS } from './marks.js';
   import { createAudio } from './audio.js';
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
   import { buildArtifact, createLiveQueue, eventsForMode } from './modes.js';
-  let feed, prev, eq, boardEl;
+  let feed, prev, eq, boardEl, detailDialog;
+  let detailField = $state(null);
+  let selectedRow = $state(null);
   let status = $state('CHOOSE HOW TO START.');
   let rows = $state([]), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
   let imported = $state(false);
@@ -25,18 +26,17 @@
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
   let timeline = [], deliveries = {}, pending = {}, strokeModes = new Map(), drawing = null, audio = null, activeStroke = false;
   const elapsed = () => Date.now()-started;
-  let lanesData = $state({marks:[],words:[],links:[]});
-  function refreshLanes(){lanesData=lanes(eventsForMode(timeline,operation));}
+
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
-  function addLine(cls,text){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed())}];scroll();}
+  function addLine(cls,text,options={}){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed()),...options}];scroll();}
   function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
   function scroll(){requestAnimationFrame(()=>{if(feed)feed.scrollTop=feed.scrollHeight;});}
   function rowText(stroke,state){const p=stroke.pts.at(-1);return `${stroke.summary?.text || stroke.tool.toUpperCase()+' '+p.x+', '+p.y+' · '+p.utc} · ${state}`;}
   function updateRow(mark,state,message){rows=rows.map(row=>{
     if(row.key!==mark.id)return row;
     const agentMessage=message ?? row.agentMessage;
-    return {...row,agentMessage,text:agentMessage
-      ? `${state} · AGENT SKETCH CONTEXT (FOR APPLY):\n${agentMessage}`
+    return {...row,agentMessage,copyText:agentMessage,state,text:agentMessage
+      ? `${state} · AGENT SKETCH CONTEXT (FOR APPLY)`
       : `${mark.shape.toUpperCase()} · ${mark.strokes.length} PATH${mark.strokes.length===1?'':'S'} · ${state}`};
   });scroll();}
   function deliver(mark){
@@ -53,11 +53,24 @@
     }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
   }
   function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
+  function rowLabel(row){
+    const mark=row.mark || row.stroke?.payload;
+    if(mark)return `${mark.shape.toUpperCase()} · ${mark.enclosed_element || mark.elements?.[0] || mark.strokes?.[0]?.elements?.[0] || 'PAGE'}`;
+    if(row.stroke)return 'DRAWING · PAGE';
+    if(row.copyText)return 'FULL AGENT MESSAGE';
+    return row.text;
+  }
+  function openDetail(row){
+    selectedRow=row;
+    detailDialog.showModal();
+  }
+  function selectMessage(){
+    detailField.focus();detailField.select();
+  }
   const markQueue=createMarkQueue({onSettled:mark=>{
     const markMode=strokeModes.get(mark.id);
     for(const stroke of mark.strokes)strokeModes.delete(stroke.id);
     timeline.push({kind:'stroke',mode:markMode,t:mark.t,t_end:mark.t_end,payload:mark});
-    refreshLanes();
     rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
       .map(row=>row.key===mark.id?{...row,mark}:row);
     if(markMode==='live'&&mode==='website'&&operation==='live')return deliver(mark);
@@ -89,7 +102,7 @@
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       await markQueue.flush();
-      imported=true;mode='website';modeVersion++;drawing?.clear();timeline=[];deliveries={};pending={};strokeModes.clear();refreshLanes();
+      imported=true;mode='website';modeVersion++;drawing?.clear();timeline=[];deliveries={};pending={};strokeModes.clear();
       previewHtml(out.html);
       addLine('fin','IMPORTED '+out.url);status='WEBSITE IMPORTED. DRAW OR SPEAK ON IT.';
     }catch(err){importError=err.message;addLine('err','IMPORT FAILED: '+err.message);status='IMPORT FAILED. PREVIEW UNCHANGED.';}
@@ -117,10 +130,10 @@
       const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,current_html:currentHtml})});
       const out=await response.json();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
-      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT CONFIRMED SENT'} · FULL AGENT MESSAGE:\n${out.agent_message}`);
+      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message,state:response.ok?'SENT':'PREPARED / NOT SENT'});
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
-      previewHtml(out.html);timeline=timeline.filter(e=>!sent.includes(e));refreshLanes();
+      previewHtml(out.html);timeline=timeline.filter(e=>!sent.includes(e));
       addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
     }catch(err){if(mode==='website'&&operation==='live'&&modeVersion===runModeVersion){addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';}}
     finally{busy=false;}
@@ -215,7 +228,6 @@
     if(next===operation)return;
     const flushed=markQueue.flush();
     operation=next;modeVersion++;
-    refreshLanes();
     status=next==='live'?'LIVE: SPOKEN TURNS CHANGE THE PREVIEW.':'RECORDING: COPY YOUR WORDS AND MARKS. NO AGENT CALL.';
     const version=modeVersion;
     if(next==='live')void flushed.then(()=>{if(mode==='website'&&operation==='live'&&version===modeVersion)resumeLive();});
@@ -227,15 +239,13 @@
         if(mode==='canvas') addCanvasUtterance(turn,'reson8');
         else if(mode==='website'){
           timeline.push({kind:'transcript',mode:operation,t:turn.startMs,t_end:turn.endMs,text:turn.text,words:turn.words});
-          refreshLanes();
           if(operation==='live')requestApply();
         }
       }});
       secure=window.isSecureContext;
       publishEnabled=config.publishEnabled;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
-    const laneTimer=setInterval(refreshLanes,500);
-    return ()=>{clearInterval(laneTimer);audio?.destroy();};
+    return ()=>{audio?.destroy();};
   });
 </script>
 
@@ -267,43 +277,48 @@
     </div>
   </section>
   <section class="pane" hidden={mode==='start'}>
-    <h3>TRANSCRIPT + SKETCH LOG // ONE CLOCK</h3>
+    <h3>SESSION // MARKS + INSTRUCTIONS</h3>
     <div id="feed" bind:this={feed}>
       {#each rows as row (row.key)}
-        {#if row.stroke}
-          <button type="button" class="coord" onclick={() => retry(row)}>{row.text}</button>
-        {:else}
-          <div><span class="t">[{row.clock}] </span><span class={row.cls}>{row.text}</span></div>
-        {/if}
+        <button type="button" class="session-item" onclick={() => openDetail(row)}>
+          <span class:err={row.cls==='err'} class="session-title">{rowLabel(row)}</span>
+          <span class="session-meta">{row.clock}{row.state ? ` · ${row.state}` : ''}{row.copyText ? ' · VIEW FULL TEXT' : ''}</span>
+        </button>
       {/each}
     </div>
-    <Lanes data={lanesData} />
-    <div id="eqWrap"><div id="eqLabel">VOICE LEVEL</div><canvas id="eq" bind:this={eq}></canvas></div>
-    <div class="row">
-      <Button id="btnMic" disabled={!secure} variant={micOn?'recording':'default'} onclick={toggleMic}>{secure?(micOn?'MIC OFF':'MIC ON'):'MIC: HTTPS REQUIRED'}</Button>
+    <div id="eqWrap" class:hidden={!secure}><div id="eqLabel">VOICE LEVEL</div><canvas id="eq" bind:this={eq}></canvas></div>
+    <div class="session-actions">
+      {#if secure}<Button id="btnMic" variant={micOn?'recording':'default'} onclick={toggleMic}>{micOn?'MIC OFF':'MIC ON'}</Button>{/if}
       {#if mode==='canvas'}
-        <Button id="btnClear" variant="amber" onclick={clearCanvas}>CLEAR CANVAS</Button>
-        <Button id="btnUndo" onclick={undoCanvas}>UNDO</Button>
+        <div class="session-tools"><Button id="btnClear" onclick={clearCanvas}>CLEAR CANVAS</Button><Button id="btnUndo" onclick={undoCanvas}>UNDO</Button></div>
       {:else}
-        <Button id="btnClear" variant="amber" onclick={clearMarks}>CLEAR MARKS</Button>
+        <Button id="btnClear" onclick={clearMarks}>CLEAR MARKS</Button>
       {/if}
-    </div>
-    {#if mode==='canvas'}
-      <div class="diagram" aria-label="Diagram so far">
+      {#if mode==='canvas'}
+        <div class="diagram" aria-label="Diagram so far">
         {#each nodes as n (n.id)}<div><span class="t">{n.id}</span> {n.shape} <span class="fin">{n.label || '(unnamed)'}</span></div>{/each}
         {#each edges as e (e.id)}<div><span class="t">{e.id}</span> {e.from} → {e.to} <span class="why">{e.label}</span></div>{/each}
         {#if !nodes.length && !edges.length}<div class="t">DRAW BOXES OR CIRCLES, CONNECT THEM WITH LINES, AND NAME THEM OUT LOUD.</div>{/if}
-      </div>
-      <div class="row"><Button id="btnCopyAgent" variant="amber" onclick={copyForAgent}>COPY FOR AGENT</Button><Button id="btnCopyPng" onclick={copyPng}>COPY PNG</Button><Button id="btnDownloadPng" onclick={downloadPng}>DOWNLOAD PNG</Button></div>
-      <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
-    {:else if operation==='live'}
-      <div class="row"><Button id="btnApply" variant="amber" disabled={busy} onclick={requestApply}>APPLY ▸</Button><Button id="btnPublish" disabled={busy||!publishEnabled} onclick={publish}>{publishEnabled?'PUBLISH':'PUBLISH DISABLED'}</Button></div>
-      <div class="notice">LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW WITH ITS MARKS. APPLY SENDS MARKS WITHOUT SPEECH. {publishEnabled?'PUBLISH STAGES LOCALLY; DEPLOY IS SEPARATE.':'REVIEW ONLY — PUBLISH IS DISABLED.'} MIC NEEDS A SECURE ORIGIN AND REACHABLE AUDIO RELAY.</div>
-    {:else}
-      <div class="row"><Button id="btnCopy" variant="amber" onclick={copyArtifact}>COPY ARTIFACT</Button></div>
-      <div class="notice">RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.</div>
-    {/if}
+        </div>
+        <div class="session-tools"><Button id="btnCopyAgent" variant="amber" onclick={copyForAgent}>COPY FOR AGENT</Button><Button id="btnCopyPng" onclick={copyPng}>COPY PNG</Button><Button id="btnDownloadPng" onclick={downloadPng}>DOWNLOAD PNG</Button></div>
+        <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
+      {:else if operation==='live'}
+        <Button id="btnApply" variant="amber" disabled={busy} onclick={requestApply}>APPLY ▸</Button>
+        {#if publishEnabled}<Button id="btnPublish" disabled={busy} onclick={publish}>PUBLISH</Button>{/if}
+        <div class="notice">LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW WITH ITS MARKS. APPLY SENDS MARKS WITHOUT SPEECH. {publishEnabled?'PUBLISH STAGES LOCALLY; DEPLOY IS SEPARATE.':'REVIEW ONLY — APPLY SHOWS THE PREPARED MESSAGE, NOT A LIVE AGENT EDIT.'}</div>
+      {:else}
+        <Button id="btnCopy" variant="amber" onclick={copyArtifact}>COPY ARTIFACT</Button>
+        <div class="notice">RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.</div>
+      {/if}
+    </div>
   </section>
   <section class="pane" hidden={mode!=='canvas'}><h3>BLANK CANVAS // DRAW AND EXPLAIN</h3><div id="boardWrap"><svg id="board" bind:this={boardEl} role="img" aria-label="Drawing board"></svg></div></section>
   <section class="pane" hidden={mode!=='website'}><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><form class="row" onsubmit={importUrl}><Input id="url" aria-label="Website URL" placeholder="Paste a public website URL" bind:value={url} /><Button type="submit" disabled={busy}>IMPORT URL</Button></form><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe>{#if !imported}<p class="empty-preview">PASTE A PUBLIC URL ABOVE TO BEGIN.</p>{/if}</div></section>
 </main>
+<dialog bind:this={detailDialog} onclose={() => selectedRow=null} aria-labelledby="detail-title">
+  {#if selectedRow}
+    <div class="detail-head"><div><span class="t">{selectedRow.clock} · {selectedRow.state || 'SESSION EVENT'}</span><h2 id="detail-title">{rowLabel(selectedRow)}</h2></div><button type="button" onclick={() => detailDialog.close()} aria-label="Close full text">CLOSE</button></div>
+    <textarea bind:this={detailField} readonly value={selectedRow.copyText ?? selectedRow.text} aria-label={selectedRow.mark?'Sketch receipt text':selectedRow.copyText?'Full agent message text':'Full session event text'}></textarea>
+    <div class="detail-actions"><button type="button" onclick={selectMessage}>SELECT TEXT</button>{#if selectedRow.state==='FAILED — CLICK TO RETRY'}<button type="button" onclick={() => {retry(selectedRow);detailDialog.close();}}>RETRY MARK</button>{/if}</div>
+  {/if}
+</dialog>
