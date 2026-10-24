@@ -15,11 +15,10 @@ body{background:var(--paper);color:var(--ink);font:14px/1.45 var(--sans);overflo
 /* the muse hand is the pointer only where something can be pressed, and on the drawing surfaces */
 button:not(:disabled),a,summary,[role="button"],[role="menuitemradio"],[role="radio"]{cursor:var(--hand-cursor,pointer);}
 input{cursor:text;}
-#app{height:100vh;display:grid;grid-template-columns:88px 420px minmax(0,1fr);grid-template-rows:68px minmax(0,1fr);}
-/* rail, then the panel, then the page */
-.rail{grid-column:1;grid-row:2;}
-.panel{grid-column:2;grid-row:2;}
-.work{grid-column:3;grid-row:2;}
+#app{height:100vh;display:grid;grid-template-columns:420px minmax(0,1fr);grid-template-rows:68px minmax(0,1fr);}
+/* the panel, then the page; the tools float on the right edge */
+.panel{grid-column:1;grid-row:2;}
+.work{grid-column:2;grid-row:2;}
 button{font:inherit;color:inherit;background:none;border:0;}
 button:disabled{opacity:.4;}
 :focus-visible{outline:2px solid var(--red);outline-offset:2px;}
@@ -58,14 +57,15 @@ h2{font-size:14px;font-weight:600;}
 .url button{padding:6px 12px;border-radius:7px;font-size:13px;font-weight:500;}
 .url button:hover{background:var(--panel);}
 
-/* rail */
-.rail{display:flex;flex-direction:column;align-items:center;gap:6px;padding:18px 0;border-right:1px solid var(--rule);}
-.rail button,.rail .tool{width:68px;padding:10px 0 8px;border-radius:10px;display:flex;flex-direction:column;align-items:center;gap:5px;font-size:12px;color:var(--ink);}
-.rail button:hover{background:var(--card);}
-.rail .tool.on{background:var(--red-soft);color:var(--red);}
+/* tools: a vertical pill on the middle of the right edge */
+.tools{position:fixed;z-index:30;right:14px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:2px;padding:4px;border-radius:999px;background:var(--card);box-shadow:0 0 0 1px var(--rule-2),0 14px 30px -14px rgba(40,30,10,.4);}
+.tools button,.tools .tool{width:42px;padding:9px 0 7px;border-radius:999px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:9.5px;color:var(--ink);}
+.tools .icon{width:17px;height:17px;}
+.tools button:hover{background:var(--panel);}
+.tools .tool.on{background:var(--red);color:#fff;}
 
 /* work area */
-.work{display:flex;flex-direction:column;min-width:0;min-height:0;padding:16px 18px 18px;}
+.work{display:flex;flex-direction:column;min-width:0;min-height:0;padding:16px 70px 18px 18px;}
 .work.starting{grid-column:1/-1;padding:0;}
 .frame{flex:1;min-height:0;display:flex;flex-direction:column;border-radius:10px;background:var(--card);box-shadow:0 0 0 1px var(--rule-2),0 14px 30px -24px rgba(40,30,10,.4);overflow:hidden;}
 .chrome{display:flex;align-items:center;gap:14px;padding:10px 14px;border-bottom:1px solid var(--rule);}
@@ -81,17 +81,18 @@ iframe{position:absolute;inset:0;width:100%;height:100%;border:none;background:#
 #boardWrap{position:absolute;inset:0;overflow:auto;background:var(--card);}
 #board{display:block;touch-action:none;cursor:var(--hand-cursor,crosshair);}
 
-/* the voice pill floats over the page, like a dictation bar */
-.voice{position:absolute;z-index:5;left:50%;bottom:22px;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:7px 16px 7px 7px;border-radius:999px;background:var(--ink);color:#fff;box-shadow:0 18px 38px -14px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.06) inset;}
-.voice.off{padding-left:16px;}
-.mic{width:44px;height:44px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--red);color:#fff;box-shadow:0 0 0 4px rgba(254,42,0,.22);transition:box-shadow .2s,transform .2s;}
-.mic:hover{transform:scale(1.05);}
-.voice.on .mic{animation:breathe 1.6s ease-in-out infinite;}
-@keyframes breathe{50%{box-shadow:0 0 0 10px rgba(254,42,0,.18);}}
-#eq{width:120px;height:28px;display:block;}
-.voice-state{font-size:13px;color:rgba(255,255,255,.75);white-space:nowrap;}
-.voice.on .voice-state{color:#fff;}
-.voice .btn.primary{background:var(--red);flex:none;padding:7px 14px;font-size:13px;}
+/* the voice bar sits quietly at the foot of the panel */
+.voice{flex:none;display:flex;align-items:center;gap:10px;margin:0 18px 16px;padding:6px 14px 6px 6px;border-radius:999px;background:var(--card);color:var(--ink);box-shadow:0 0 0 1px var(--rule);}
+.voice.off{padding-left:14px;}
+.mic{width:36px;height:36px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--red-soft);color:var(--red);transition:background .2s,color .2s;}
+.mic:hover{background:#FFD6CB;}
+.voice.on{box-shadow:0 0 0 1px rgba(254,42,0,.35);}
+.voice.on .mic{background:var(--red);color:#fff;animation:breathe 1.6s ease-in-out infinite;}
+@keyframes breathe{50%{box-shadow:0 0 0 6px rgba(254,42,0,.15);}}
+#eq{flex:1;min-width:0;height:24px;display:block;}
+.voice-state{font-size:12px;color:var(--muted);white-space:nowrap;}
+.voice.on .voice-state{color:var(--ink);}
+.voice .btn.primary{flex:none;padding:5px 12px;font-size:12px;}
 
 /* startup */
 .startup{flex:1;display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);align-items:center;gap:4vw;padding:0 6vw 6vh;overflow:auto;}
@@ -183,15 +184,15 @@ dialog::backdrop{background:rgba(23,23,23,.35);}
 dialog textarea{width:100%;height:50vh;padding:12px;border:0;border-radius:8px;box-shadow:0 0 0 1px var(--rule-2);font:12px/1.5 var(--mono);resize:vertical;}
 .detail-actions{display:flex;gap:10px;margin-top:10px;font-size:13px;}
 
-@media (max-width:1240px){#app{grid-template-columns:76px 360px minmax(0,1fr);}#eq{width:80px;}}
+@media (max-width:1240px){#app{grid-template-columns:360px minmax(0,1fr);}}
 @media (max-width:900px){
   body{overflow:auto;}
   #app{height:auto;grid-template-columns:1fr;grid-template-rows:auto;}
   .top{flex-wrap:wrap;padding:10px 16px;}
   .url{order:3;flex-basis:100%;max-width:none;}
-  .rail{flex-direction:row;justify-content:center;border-right:0;border-bottom:1px solid var(--rule);padding:8px 16px;}
   .frame{height:75vh;flex:none;}
-  .rail,.panel,.work{grid-column:1;grid-row:auto;}
+  .panel,.work{grid-column:1;grid-row:auto;}
+  .tools{top:auto;bottom:16px;transform:none;flex-direction:row;}
   .panel{border-right:0;border-top:1px solid var(--rule);order:3;}
   .startup{grid-template-columns:1fr;padding:24px 16px;}
   .startup-muse{display:none;}

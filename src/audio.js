@@ -33,13 +33,13 @@ export function createAudio(canvas, {port, audioPath, onLine, onTurn, onTurnStar
       level=Math.min(1,Math.sqrt(sum/data.length)*4.5);
     }
     history.push(level); while(history.length>bars) history.shift();
-    ctx.fillStyle='rgba(255,255,255,.35)';
+    ctx.fillStyle='rgba(23,23,23,.22)';
     for(let x=0;x<W;x+=step) ctx.fillRect(x,mid-.5,1.5,1);
     const offset=bars-history.length;
     history.forEach((v,k)=>{
       if(v<0.02) return;
       const h=Math.max(2,v*(H-4));
-      ctx.fillStyle=v>0.35?'#FFFFFF':'rgba(255,255,255,.55)';
+      ctx.fillStyle=v>0.35?'#2F5FAE':'rgba(47,95,174,.45)';
       ctx.fillRect((offset+k)*step,mid-h/2,2,h);
     });
   }

@@ -422,7 +422,7 @@
 </header>
 
 {#if mode!=='start'}
-  <nav class="rail" aria-label="Tools">
+  <nav class="tools" aria-label="Tools">
     <span class="tool on" title="Draw on the page"><Icon name="pen" /><span>Draw</span></span>
     {#if mode==='canvas'}<button id="btnUndo" onclick={undoCanvas}><Icon name="undo" /><span>Undo</span></button>{/if}
     <button id="btnClear" onclick={mode==='canvas'?clearCanvas:clearMarks}><Icon name="erase" /><span>Clear</span></button>
@@ -455,22 +455,11 @@
     <div class="sheet">
       <div id="prevWrap" hidden={mode!=='website'}><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe>{#if !imported}<p class="empty-preview">Paste a public URL above to begin.</p>{/if}</div>
       <div id="boardWrap" hidden={mode!=='canvas'}><svg id="board" bind:this={boardEl} role="img" aria-label="Drawing board"></svg></div>
-      <div class="voice" class:on={micOn} class:off={!secure}>
-        {#if secure}
-          <button id="btnMic" class="mic" onclick={toggleMic} aria-label={micOn ? 'Stop listening' : 'Start listening'}><Icon name="mic" size={20} /></button>
-        {/if}
-        <canvas id="eq" bind:this={eq}></canvas>
-        <span class="voice-state">{!secure ? 'Mic needs a secure origin' : micOn ? 'Listening' : 'Tap to speak'}</span>
-        {#if mode==='website'&&operation==='live'}
-          {#if manualAction}<Button id="btnApply" variant="primary" disabled={busy} onclick={() => apply(true)}><span class="sc">{manualAction==='retry'?'RETRY AGENT':manualAction==='speech-only'?'SEND SPEECH ONLY':'SEND SKETCHES'}</span></Button>{/if}
-        {/if}
-      </div>
     </div>
   </section>
 </main>
 
-{#if mode!=='start'}
-  <aside class="panel">
+<aside class="panel" hidden={mode==='start'}>
     <div class="pane">
       {#if mode==='website'}
         <section class="block">
@@ -530,8 +519,17 @@
         </div>
       </details>
     </div>
+    <div class="voice" class:on={micOn} class:off={!secure}>
+      {#if secure}
+        <button id="btnMic" class="mic" onclick={toggleMic} aria-label={micOn ? 'Stop listening' : 'Start listening'}><Icon name="mic" size={18} /></button>
+      {/if}
+      <canvas id="eq" bind:this={eq}></canvas>
+      <span class="voice-state">{!secure ? 'Mic needs a secure origin' : micOn ? 'Listening' : 'Tap to speak'}</span>
+      {#if mode==='website'&&operation==='live'}
+        {#if manualAction}<Button id="btnApply" variant="primary" disabled={busy} onclick={() => apply(true)}><span class="sc">{manualAction==='retry'?'RETRY AGENT':manualAction==='speech-only'?'SEND SPEECH ONLY':'SEND SKETCHES'}</span></Button>{/if}
+      {/if}
+    </div>
   </aside>
-{/if}
 
 <dialog bind:this={detailDialog} onclose={() => selectedRow=null} aria-labelledby="detail-title">
   {#if selectedRow}
