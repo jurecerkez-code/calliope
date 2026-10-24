@@ -1,5 +1,6 @@
 """Regression checks for Calliope's drawing handoff and built studio."""
 import json
+import http.client
 import re
 import socket
 import threading
@@ -349,6 +350,70 @@ class StudioTest(unittest.TestCase):
                 code, result = self.post('/api/apply', payload)
                 self.assertNotEqual(code, 200)
                 self.assertIn('error', result)
+
+    def test_incomplete_lyceum_answer_identifies_failure_without_leaking_output(self):
+        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
+                   'current_html': '<html><h1>Old</h1></html>'}
+        cases = [
+            ('length', 'PRIVATE MODEL OUTPUT', 'output limit', False),
+            ('stop', '', 'empty answer', True),
+            ('stop', '{"html": "PRIVATE MODEL OUTPUT', 'malformed JSON', False),
+            ('stop', json.dumps({'html': '<html>PRIVATE MODEL OUTPUT'}), 'incomplete HTML', False),
+            ('stop', ['PRIVATE MODEL OUTPUT'], 'invalid content', False),
+        ]
+        for finish, content, reason, has_reasoning in cases:
+            with self.subTest(reason=reason), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+                 patch.object(server.urllib.request, 'build_opener') as opener:
+                reply = {'choices': [{'finish_reason': finish, 'message': {
+                    'content': content, 'reasoning_content': 'PRIVATE REASONING' if has_reasoning else ''}}]}
+                opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
+                connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+                try:
+                    connection.request('POST', '/api/apply', json.dumps(payload),
+                                       {'Content-Type': 'application/json'})
+                    response = connection.getresponse()
+                    code, result = response.status, json.load(response)
+                finally:
+                    connection.close()
+            self.assertEqual(code, 502)
+            self.assertIn(reason, result['error'])
+            self.assertNotIn('PRIVATE', result['error'])
+            self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], payload['current_html'], []))
+            self.assertNotIn('html', result)
+
+        with self.subTest(reason='invalid message'), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            reply = {'choices': [{'finish_reason': 'stop', 'message': None}]}
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
+            connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+            try:
+                connection.request('POST', '/api/apply', json.dumps(payload),
+                                   {'Content-Type': 'application/json'})
+                response = connection.getresponse()
+                code, result = response.status, json.load(response)
+            finally:
+                connection.close()
+            self.assertEqual(code, 502)
+            self.assertIn('invalid message', result['error'])
+            self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], payload['current_html'], []))
+            self.assertNotIn('html', result)
+
+        with self.subTest(reason='malformed provider body'), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'{PRIVATE PROVIDER BODY'
+            connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+            try:
+                connection.request('POST', '/api/apply', json.dumps(payload),
+                                   {'Content-Type': 'application/json'})
+                response = connection.getresponse()
+                code, result = response.status, json.load(response)
+            finally:
+                connection.close()
+            self.assertEqual(code, 502)
+            self.assertIn('malformed provider response', result['error'])
+            self.assertNotIn('PRIVATE', result['error'])
+            self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], payload['current_html'], []))
+            self.assertNotIn('html', result)
 
     def test_provider_bearer_token_does_not_follow_redirect(self):
         visited = []
