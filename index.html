@@ -80,6 +80,7 @@ var t0 = Date.now();
 /* single event log: transcript chunks and strokes on one clock */
 var timeline = [];      // {t, kind:'transcript'|'stroke', ...}
 var micOn = false, ws = null, audioCtx = null, analyser = null;
+var lastCandidate = '', lastInterEl = null;
 
 function fmt(ms){ var s = Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }
 function addLine(cls, txt){
@@ -213,15 +214,26 @@ document.getElementById('btnMic').addEventListener('click', async function(){
       var msg = JSON.parse(ev.data);
       if(msg.error){ addLine('err', 'ERROR: '+msg.error); return; }
       var type = msg.type || '', txt = msg.text || '';
-      if(type === 'turn_end_candidate'){ if(txt) addLine('inter', txt); return; }
-      if(type === 'turn_end'){
-        if(txt){
-          timeline.push({kind:'transcript', t: Date.now()-t0, text: txt});
-          addLine('fin', txt);
+      if(type === 'turn_end_candidate'){
+        if(!txt) return;
+        lastCandidate = txt;
+        if(lastInterEl){ lastInterEl.textContent = txt; }
+        else{
+          addLine('inter', txt);
+          lastInterEl = feed.lastElementChild ? feed.lastElementChild.querySelector('.inter') : null;
         }
         return;
       }
-      if(type === 'turn_start'){ addLine('inter', '(listening)'); return; }
+      if(type === 'turn_end'){
+        var finalTxt = txt || lastCandidate;
+        if(finalTxt){
+          timeline.push({kind:'transcript', t: Date.now()-t0, text: finalTxt});
+          addLine('fin', finalTxt);
+        }
+        lastCandidate = ''; lastInterEl = null;
+        return;
+      }
+      if(type === 'turn_start'){ addLine('inter', '(listening)'); lastInterEl = null; return; }
       if(txt){ addLine('inter', txt); }
     };
     ws.onopen = function(){ addLine('fin', 'RESON8 LINK UP (calliope). SPEAK.'); };

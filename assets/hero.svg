@@ -11,7 +11,7 @@
   <rect x="1" y="1" width="1198" height="418" rx="16" fill="url(#g)"/>
   <path d="M28 56 V28 H56 M1144 28 H1172 V56 M28 364 V392 H56 M1144 392 H1172 V364" stroke="#37ff8b" stroke-width="3" fill="none"/>
 
-  <text x="60" y="150" font-size="66" font-weight="bold" fill="#37ff8b">VOICE-DRAW</text>
+  <text x="60" y="150" font-size="66" font-weight="bold" fill="#37ff8b">CALLIOPE</text>
   <text x="60" y="204" font-size="26" fill="#c8ffd8">speak + draw on the website. it changes live.</text>
   <text x="60" y="248" font-size="18" fill="#6f8f84">the agent reads your words and your marks together,</text>
   <text x="60" y="274" font-size="18" fill="#6f8f84">then rebuilds the page while the meeting keeps going.</text>

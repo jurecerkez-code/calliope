@@ -2,7 +2,7 @@
   <img src="assets/hero.svg" alt="VOICE-DRAW: speak + draw on the website, it changes live" width="900">
 </p>
 
-<h1 align="center">voicedraw</h1>
+<h1 align="center">calliope</h1>
 
 <p align="center">
   <b>Speak to the agent while drawing on a website. It changes the website live.</b>
@@ -63,6 +63,7 @@ Then open **http://127.0.0.1:8800** in Chrome, press **MIC ON**, talk while draw
 | `server.py` | HTTP server, Reson8 audio relay, the reasoning and execution loop, staged publish |
 | `index.html` | The app: drawing overlay injected into the website preview, element capture, shared timeline, equalizer, agent reasoning feed |
 | `jamie-mock.html` | A mock of the jamie.ai homepage with their real copy. This is the canvas in the demo |
+| `e2e_voice_test.py` | Proof of the voice to agent path. Generates speech, runs it through Reson8, feeds the real transcript to the agent, prints the reasoning and the executed HTML |
 | `assets/` | The visuals in this README |
 
 ## Status
