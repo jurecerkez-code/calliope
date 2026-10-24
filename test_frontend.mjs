@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBundles, makePayload, canApply, lanes, adaptTurn } from './src/timeline.js';
+import { buildBundles, makePayload, canApply, lanes, adaptTurn, withoutMarks } from './src/timeline.js';
+import { websiteRelations } from './src/diagram.js';
 import { describeSketch } from './src/shape.js';
 import { makeMark, createMarkQueue, MARK_SETTLE_DELAY_MS } from './src/marks.js';
 import { readFileSync } from 'node:fs';
@@ -231,6 +232,28 @@ test('delivery waits for the recognition window and APPLY flushes it', async () 
   assert.equal(timers.size,0);
 });
 
+test('clearing marks drops pending delivery and removes accepted marks without deleting speech', async () => {
+  const sent=[];
+  const queue=createMarkQueue({onSettled:mark=>sent.push(mark),setTimer:()=>1,clearTimer:()=>{}});
+  const highlight=makePayload({id:'highlight',tool:'highlighter',t:1,pts,elements:['button#download']},4,{width:949,height:2862},'');
+  const arrow=makePayload({id:'arrow',tool:'pen',t:5,
+    pts:[pts[0],{...pts[1],x:200,y:100},{...pts[2],x:400,y:120}],elements:['button#download']},8,{width:949,height:2862},'');
+  const mark=makeMark([highlight]), direction=makeMark([arrow]);
+  queue.add(arrow);
+  queue.clear();
+  await queue.flush();
+  assert.deepEqual(sent,[]);
+  const timeline=[{kind:'transcript',t:0,text:'move this'},
+    {kind:'stroke',t:1,payload:mark},{kind:'stroke',t:5,payload:direction}];
+  assert.equal(websiteRelations([mark,direction]).length,1);
+  const cleared=withoutMarks(timeline);
+  assert.deepEqual(cleared,[timeline[0]]);
+  assert.deepEqual(buildBundles(cleared)[0].strokes,[]);
+  assert.deepEqual(websiteRelations(cleared.filter(e=>e.kind==='stroke').map(e=>e.payload)),[]);
+  const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
+  assert.match(app,/markQueue\.clear\(\);drawing\?\.clear\(\);timeline=withoutMarks\(timeline\);deliveries=\{\}/);
+});
+
 test('a natural pause between X strokes does not send the first one', async () => {
   const sent=[], scheduled=[];
   const queue=createMarkQueue({onSettled:mark=>sent.push(mark),
@@ -353,4 +376,42 @@ test('studio has no text instruction entry; mode events remain separate', async 
   assert.deepEqual(eventsForMode(events,'live'), [live]);
   assert.deepEqual(eventsForMode(events,'recording'), [recording]);
   assert.equal(events.length, 2);
+});
+
+test('a live move waits for its arrow without consuming a circled source at the speech boundary', async () => {
+  const { eventsForMode, awaitingMoveArrow } = await import('./src/modes.js');
+  const point=(x,y,selector='h1')=>({x,y,selector,text:'Destination'});
+  const source={id:'source',shape:'circle',t:10,strokes:[{id:'source',shape:'circle',tool:'pen',
+    bbox:{x:20,y:20,width:80,height:60},enclosed_element:'h1',
+    pts:[point(20,20),point(100,20),point(100,80),point(20,80),point(20,20)]}]};
+  const arrow={id:'arrow',shape:'freehand',t:30,strokes:[{id:'arrow',shape:'freehand',tool:'pen',
+    bbox:{x:25,y:60,width:195,height:0},pts:[point(25,60),point(220,60,'section#destination')]}]};
+  const events=[{kind:'stroke',mode:'live',t:10,payload:source},
+    {kind:'transcript',mode:'live',text:'move this',t:20},
+    {kind:'stroke',mode:'recording',t:30,payload:arrow}];
+  const live=eventsForMode(events,'live');
+  const before=websiteRelations(live.filter(e=>e.kind==='stroke').map(e=>e.payload));
+  assert.equal(awaitingMoveArrow(live,before),true);
+  assert.equal(awaitingMoveArrow([live[1]],[]),true);
+  const completed=[...live,{kind:'stroke',mode:'live',t:30,payload:arrow}];
+  const relations=websiteRelations(completed.filter(e=>e.kind==='stroke').map(e=>e.payload));
+  assert.equal(relations[0].kind,'move');
+  assert.equal(relations[0].from.stroke,'source');
+  assert.equal(awaitingMoveArrow(completed,relations),false);
+  const oldSource={...source,id:'old',strokes:[{...source.strokes[0],id:'old'}]};
+  const older=[{kind:'stroke',mode:'live',t:1,payload:oldSource},
+    {kind:'stroke',mode:'live',t:2,payload:arrow},
+    {kind:'stroke',mode:'live',t:19,payload:source},live[1]];
+  const priorRelation={kind:'move',from:{stroke:'old'},arrow:'arrow'};
+  assert.equal(awaitingMoveArrow(older,[priorRelation]),true);
+  const duringSpeech=[{kind:'stroke',mode:'live',t:9500,payload:oldSource},
+    {kind:'transcript',mode:'live',t:10000,text:'move this'},
+    {kind:'stroke',mode:'live',t:11300,payload:source},
+    {kind:'stroke',mode:'live',t:12000,payload:arrow}];
+  assert.equal(awaitingMoveArrow(duringSpeech,[{kind:'move',from:{stroke:'source'},arrow:'arrow'}]),false);
+  const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
+  assert.match(app,/if\(!force&&awaitingMoveArrow\(sent,relations\)\)/);
+  assert.match(app,/deliver\(mark\)\.then\(requestApply\)/);
+  assert.match(app,/onclick=\{\(\) => apply\(true\)\}/);
+  assert.match(app,/JSON\.stringify\(\{bundles,relations,current_html:currentHtml\}\)/);
 });

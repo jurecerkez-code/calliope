@@ -109,6 +109,144 @@ def valid_mark(mark):
 
 
 # ---------- Anthropic: REASON about the turn, then EXECUTE the website change ----------
+def _clip(v, n=200) -> str:
+    return re.sub(r"[\x00-\x1f]", " ", str(v if v is not None else ""))[:n]
+
+
+def is_website_loop(stroke) -> bool:
+    """Match the closed-loop cases in src/lib/strokes.js classifyShape()."""
+    points = stroke['pts']
+    box = stroke['bbox']
+    diagonal = math.hypot(box['width'], box['height'])
+    length = sum(math.hypot(b['x'] - a['x'], b['y'] - a['y']) for a, b in zip(points, points[1:]))
+    if diagonal < 12 or length < 15:
+        return False
+    gap = math.hypot(points[-1]['x'] - points[0]['x'], points[-1]['y'] - points[0]['y'])
+
+    # Same iterative Ramer-Douglas-Peucker reduction at epsilon=4, then the
+    # sharp-reversal guard that keeps scribbles from becoming loop marks.
+    keep = {0, len(points) - 1}
+    stack = [(0, len(points) - 1)]
+    while stack:
+        start, end = stack.pop()
+        a, b = points[start], points[end]
+        dx, dy = b['x'] - a['x'], b['y'] - a['y']
+        distance = math.hypot(dx, dy)
+        def perpendicular(p):
+            if not distance:
+                return math.hypot(p['x'] - a['x'], p['y'] - a['y'])
+            return abs(dy * p['x'] - dx * p['y'] + b['x'] * a['y'] - b['y'] * a['x']) / distance
+        largest, index = 0, -1
+        for i in range(start + 1, end):
+            d = perpendicular(points[i])
+            if d > largest:
+                largest, index = d, i
+        if largest > 4 and index != -1:
+            keep.add(index)
+            stack.extend([(start, index), (index, end)])
+    simple = [points[i] for i in sorted(keep)]
+    reversals = 0
+    for a, b, c in zip(simple, simple[1:], simple[2:]):
+        u = (b['x'] - a['x'], b['y'] - a['y'])
+        v = (c['x'] - b['x'], c['y'] - b['y'])
+        magnitude = math.hypot(*u) * math.hypot(*v)
+        if magnitude and (u[0] * v[0] + u[1] * v[1]) / magnitude < -0.5:
+            reversals += 1
+    if reversals >= 3 and gap / length < 0.5:
+        return False
+    if gap < max(25, diagonal * .25) and length > diagonal * 1.6:
+        return True
+    return gap / length <= 0.8 and length > diagonal * 2
+
+
+def valid_relations(relations, marks) -> bool:
+    """Only describe arrows backed by accepted marks in this APPLY turn."""
+    if not isinstance(relations, list) or len(relations) > 50:
+        return False
+    if not relations:
+        return True
+    if any(not isinstance(mark, dict) or not isinstance(mark.get('strokes'), list) for mark in marks):
+        return False
+    try:
+        if any(isinstance(mark.get('t'), bool) or not isinstance(mark.get('t'), (int, float))
+               or not math.isfinite(mark['t']) for mark in marks):
+            return False
+    except OverflowError:
+        return False
+    ordered = sorted(marks, key=lambda mark: mark['t'])
+    by_id = {mark['id']: (i, mark) for i, mark in enumerate(ordered)}
+    if len(by_id) != len(ordered):
+        return False
+
+    def node_at(prior, point):
+        candidates = []
+        for mark in prior:
+            if len(mark['strokes']) != 1 or mark['shape'] == 'x':
+                continue
+            stroke = mark['strokes'][0]
+            if stroke['shape'] not in ('circle', 'square', 'triangle') and not is_website_loop(stroke):
+                continue
+            box = stroke['bbox']
+            if box['x'] - 28 <= point['x'] <= box['x'] + box['width'] + 28 and box['y'] - 28 <= point['y'] <= box['y'] + box['height'] + 28:
+                candidates.append(stroke)
+        return min(candidates, key=lambda stroke: stroke['bbox']['width'] * stroke['bbox']['height'], default=None)
+
+    seen = set()
+    for relation in relations:
+        if not isinstance(relation, dict) or relation.get('kind') not in ('move', 'link', 'point'):
+            return False
+        arrow_id = relation.get('arrow')
+        if not isinstance(arrow_id, str) or arrow_id in seen or arrow_id not in by_id:
+            return False
+        seen.add(arrow_id)
+        arrow_index, item = by_id[arrow_id]
+        if len(item['strokes']) != 1:
+            return False
+        arrow = item['strokes'][0]
+        box = arrow['bbox']
+        if (arrow['tool'] != 'pen' or arrow['shape'] in ('circle', 'square', 'triangle') or
+                is_website_loop(arrow) or math.hypot(box['width'], box['height']) <= 40):
+            return False
+        start = arrow['pts'][0]
+        tip = max(arrow['pts'], key=lambda p: (p['x'] - start['x']) ** 2 + (p['y'] - start['y']) ** 2)
+        source = node_at(ordered[:arrow_index], start)
+        target = node_at(ordered[:arrow_index], tip)
+        if (source is None and target is None) or source is target and source is not None:
+            return False
+        kind = 'link' if source and target else 'move' if source else 'point'
+        if kind != relation['kind']:
+            return False
+        def endpoint(stroke):
+            if not stroke:
+                return None
+            name = (stroke['enclosed_element'] if stroke['shape'] in ('circle', 'square', 'triangle') else '') or (stroke['elements'] or [''])[0]
+            return {'stroke': stroke['id'], 'target': name}
+        if target:
+            destination = {**(endpoint(target) or {}), 'x': tip['x'], 'y': tip['y']}
+        else:
+            destination = {'stroke': None, 'target': tip.get('selector', ''),
+                           'text': ' '.join((tip.get('text') or '').split())[:80], 'x': tip['x'], 'y': tip['y']}
+        if relation.get('from') != endpoint(source) or relation.get('to') != destination:
+            return False
+    return True
+
+
+def relation_lines(relations) -> list:
+    lines = []
+    for relation in relations:
+        source = relation.get('from') or {}
+        destination = relation['to']
+        at = f"({round(destination['x'])}, {round(destination['y'])})"
+        if relation['kind'] == 'move':
+            lines.append(f"ARROW from the mark on {_clip(source.get('target')) or 'an area'} to page point {at}"
+                         f" over {_clip(destination.get('target')) or 'the page'}: the user most likely wants that element moved there.")
+        elif relation['kind'] == 'link':
+            lines.append(f"ARROW from the mark on {_clip(source.get('target')) or 'an area'} to the mark on {_clip(destination.get('target')) or 'another area'}: the user relates these two.")
+        else:
+            lines.append(f"ARROW pointing at the mark on {_clip(destination.get('target')) or 'an area'} at {at}.")
+    return lines
+
+
 def agent_sketch_message(item: dict) -> str:
     """The exact sketch line used in the agent prompt and returned in its receipt."""
     paths: list[dict] = item['strokes'] if isinstance(item.get('strokes'), list) else [item]
@@ -131,7 +269,7 @@ def agent_sketch_message(item: dict) -> str:
         description += f" One mark made of {len(paths)} ordered original paths, not separate commands."
     return description
 
-def build_agent_prompt(bundles: list, current_html: str) -> str:
+def build_agent_prompt(bundles: list, current_html: str, relations: list | None = None) -> str:
     """Build the complete text of the user message submitted to the agent."""
     timeline_desc = []
     for b in bundles:
@@ -156,6 +294,8 @@ def build_agent_prompt(bundles: list, current_html: str) -> str:
         'Answer as JSON: {"reasoning": "...", "html": "<!DOCTYPE html>..."}\n\n'
         "TURN TIMELINE (words + sketches, one clock):\n"
         + "\n".join(timeline_desc)
+        + ("\n\nARROWS BETWEEN MARKS (start and tip name the intended move or link):\n" + "\n".join(lines)
+           if (lines := relation_lines(relations or [])) else "")
         + f"\n\nCURRENT HTML:\n{current_html}"
     )
     return prompt
@@ -331,8 +471,10 @@ class Handler(BaseHTTPRequestHandler):
                 with STROKES_LOCK:
                     if any((MARKS if isinstance(s.get('strokes'), list) else STROKES).get(s.get('id')) != s for s in strokes):
                         return self._send(409, {'error': 'mark not accepted by backend; retry delivery'})
+                if not valid_relations(payload.get('relations', []), strokes):
+                    return self._send(400, {'error': 'invalid arrow relation for accepted marks'})
                 bundles, html = payload.get('bundles', []), payload.get('current_html', '')
-                prompt = build_agent_prompt(bundles, html)
+                prompt = build_agent_prompt(bundles, html, payload.get('relations', []))
                 if not ANTHROPIC_KEY:
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured',
                                             'agent_message': prompt})

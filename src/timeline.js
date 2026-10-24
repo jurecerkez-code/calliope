@@ -25,6 +25,10 @@ export function canApply(strokes, deliveries) {
   return strokes.every(stroke => deliveries[stroke.id] === 'accepted');
 }
 
+export function withoutMarks(timeline) {
+  return timeline.filter(event => event.kind !== 'stroke');
+}
+
 export function adaptTurn(final, candidate, audioStartMs, nowMs) {
   const text = (final.text || candidate?.text || '').trim();
   const sameWords = (a, b) => a.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(' ') ===

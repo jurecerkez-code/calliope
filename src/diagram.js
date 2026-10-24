@@ -4,7 +4,7 @@
 // Pure functions over plain data; no DOM.
 
 import { buildTimeline, fuse } from "./lib/fusion.js";
-import { makeStroke } from "./lib/strokes.js";
+import { classifyShape, makeStroke } from "./lib/strokes.js";
 import { recognizeShape } from "./shape-recognition.js";
 
 const NEAR = 28; // px around a node that still counts as touching it
@@ -45,14 +45,25 @@ function tipOf(points) {
 	);
 }
 
-// strokes: [{id, tool:'pen', points:[{x,y,t}]}] in board CSS pixels, t in session ms.
+// Both ends are resolved against marks already present when the arrow is drawn.
+export function connect(nodes, points) {
+	const tip = tipOf(points);
+	return { from: nodeAt(nodes, points[0]), to: nodeAt(nodes, tip), tip };
+}
+
+// strokes: [{id, tool, points:[{x,y,t}]}] in board CSS pixels, t in session ms.
 export function classifyStrokes(strokes) {
 	return strokes.map((s) => {
 		const rec = { ...makeStroke(s.id, s.points), tool: s.tool || "pen" };
-		const recognised = recognizeShape(s.points).shape;
+		const recognised =
+			rec.tool === "pen" ? recognizeShape(s.points).shape : "highlight";
 		rec.kind =
 			NODE_SHAPES[recognised] ||
-			(rec.shape === "closed-loop" ? "blob" : rec.shape);
+			(rec.tool === "pen" && rec.shape === "closed-loop"
+				? "blob"
+				: recognised === "highlight"
+					? "highlight"
+					: rec.shape);
 		rec.tip = tipOf(rec.points);
 		return rec;
 	});
@@ -147,7 +158,7 @@ export function buildDiagram(strokes, utterances) {
 	}
 	// Edges first, so small marks next to an edge's tip can be read as its arrowhead.
 	for (const r of recs) {
-		if (owner[r.id] || diag(r.bbox) <= SMALL)
+		if (owner[r.id] || r.kind === "highlight" || diag(r.bbox) <= SMALL)
 			continue;
 		const from = nodeAt(nodes, r.points[0]);
 		const to = nodeAt(nodes, r.tip);
@@ -292,4 +303,48 @@ export function canvasPacketText(packet) {
 		"",
 		"The PNG snapshot shows the original drawing; ids N1, E1, ... are written next to each element.",
 	].join("\n");
+}
+
+// Website mode reads settled marks in drawing order. An arrow cannot acquire
+// a source that was circled later, even if both end up in the same APPLY turn.
+const MARK_SHAPES = new Set(["circle", "square", "triangle"]);
+
+export function isWebsiteMark(item) {
+	const p = item.strokes ? item.strokes[0] : item;
+	return item.shape !== "x" && (MARK_SHAPES.has(p.shape) ||
+		p.tool === "highlighter" || classifyShape(p.pts.map(q => ({ x: q.x, y: q.y }))) === "closed-loop");
+}
+
+export function websiteRelations(items) {
+	const marks = [];
+	const relations = [];
+	for (const item of items) {
+		const p = item.strokes ? item.strokes[0] : item;
+		if (item.shape === "x") continue;
+		const points = p.pts.map(q => ({ x: q.x, y: q.y }));
+		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
+		const target = (MARK_SHAPES.has(p.shape) && p.enclosed_element) || p.elements?.[0] || "";
+		if (isWebsiteMark(item)) {
+			marks.push({ id: p.id, bbox, target });
+		} else if (p.tool === "pen" && diag(bbox) > SMALL) {
+			const { from, to, tip } = connect(marks, p.pts);
+			if ((!from && !to) || (from && from === to)) continue;
+			relations.push({
+				kind: from && to ? "link" : from ? "move" : "point",
+				arrow: p.id,
+				from: from ? { stroke: from.id, target: from.target } : null,
+				to: to
+					? { stroke: to.id, target: to.target, x: tip.x, y: tip.y }
+					: { stroke: null, target: tip.selector || "", text: (tip.text || "").replace(/\s+/g, " ").trim().slice(0, 80), x: tip.x, y: tip.y },
+			});
+		}
+	}
+	return relations;
+}
+
+export function describeRelation(r) {
+	const at = `(${Math.round(r.to.x)}, ${Math.round(r.to.y)})`;
+	if (r.kind === "move") return `ARROW: MOVE ${r.from.target || "MARKED AREA"} → ${at}${r.to.target ? " ON " + r.to.target : ""}`;
+	if (r.kind === "link") return `ARROW: ${r.from.target || "MARK"} → ${r.to.target || "MARK"}`;
+	return `ARROW: POINTS AT ${r.to.target || "MARK"}`;
 }

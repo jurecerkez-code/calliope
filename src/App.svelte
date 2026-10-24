@@ -4,13 +4,13 @@
   import Button from './components/ui/button/Button.svelte';
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
-  import { buildBundles, canApply } from './timeline.js';
+  import { buildBundles, canApply, withoutMarks } from './timeline.js';
   import { createMarkQueue, MARK_SETTLE_DELAY_MS } from './marks.js';
   import { createAudio } from './audio.js';
   import { attachBoard } from './board.js';
-  import { buildDiagram, buildCanvasPacket, canvasPacketText } from './diagram.js';
+  import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
-  import { buildArtifact, createLiveQueue, eventsForMode } from './modes.js';
+  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow } from './modes.js';
   let feed, prev, eq, boardEl, detailDialog;
   let detailField = $state(null);
   let selectedRow = $state(null);
@@ -73,6 +73,14 @@
     timeline.push({kind:'stroke',mode:markMode,t:mark.t,t_end:mark.t_end,payload:mark});
     rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
       .map(row=>row.key===mark.id?{...row,mark}:row);
+    if(markMode==='live'){
+      const live=eventsForMode(timeline,'live');
+      const relations=websiteRelations(live.filter(e=>e.kind==='stroke').map(e=>e.payload));
+      const relation=relations.find(r=>r.arrow===mark.id);
+      if(relation)addLine('why',describeRelation(relation));
+      if(relation && mode==='website' && operation==='live' &&
+          live.some(e=>e.kind==='transcript') && !awaitingMoveArrow(live,relations))void deliver(mark).then(requestApply);
+    }
     if(markMode==='live'&&mode==='website'&&operation==='live')return deliver(mark);
     updateRow(mark,markMode==='recording'?'RECORDED':'QUEUED FOR LIVE');
   }});
@@ -92,7 +100,11 @@
       markQueue.add(payload);
     }
   });}
-  function clearMarks(){drawing?.clear();addLine('fin','MARKS CLEARED');}
+  function clearMarks(){
+    if(busy||activeStroke)return;
+    markQueue.clear();drawing?.clear();timeline=withoutMarks(timeline);deliveries={};pending={};strokeModes.clear();
+    addLine('fin','MARKS CLEARED');
+  }
   async function importUrl(event){
     event.preventDefault();
     if(busy)return;
@@ -112,7 +124,7 @@
     if(micOn){audio?.stop();micOn=false;return;}
     try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
   }
-  async function apply(){
+  async function apply(force=false){
     if(mode!=='website'||operation!=='live'||busy)return;
     if(activeStroke){addLine('err','FINISH DRAWING BEFORE APPLY');return;}
     const runModeVersion=modeVersion;
@@ -123,11 +135,13 @@
       const sent=eventsForMode(timeline,'live');
       const bundles=buildBundles(sent), marks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
       if(!bundles.length){status='NOTHING NEW FOR THE AGENT.';return;}
+      const relations=websiteRelations(marks).slice(0,50);
+      if(!force&&awaitingMoveArrow(sent,relations)){status='DRAW AN ARROW TO COMPLETE THE MOVE, OR PRESS APPLY TO SEND SPEECH ONLY.';return;}
       await Promise.all(marks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
       status='ANTHROPIC IS REASONING...';
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,current_html:currentHtml})});
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations,current_html:currentHtml})});
       const out=await response.json();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message,state:response.ok?'SENT':'PREPARED / NOT SENT'});
@@ -303,7 +317,7 @@
         <div class="session-tools"><Button id="btnCopyAgent" variant="amber" onclick={copyForAgent}>COPY FOR AGENT</Button><Button id="btnCopyPng" onclick={copyPng}>COPY PNG</Button><Button id="btnDownloadPng" onclick={downloadPng}>DOWNLOAD PNG</Button></div>
         <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
       {:else if operation==='live'}
-        <Button id="btnApply" variant="amber" disabled={busy} onclick={requestApply}>APPLY ▸</Button>
+        <Button id="btnApply" variant="amber" disabled={busy} onclick={() => apply(true)}>APPLY ▸</Button>
         {#if publishEnabled}<Button id="btnPublish" disabled={busy} onclick={publish}>PUBLISH</Button>{/if}
         <div class="notice">LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW WITH ITS MARKS. APPLY SENDS MARKS WITHOUT SPEECH. {publishEnabled?'PUBLISH STAGES LOCALLY; DEPLOY IS SEPARATE.':'REVIEW ONLY — APPLY SHOWS THE PREPARED MESSAGE, NOT A LIVE AGENT EDIT.'}</div>
       {:else}

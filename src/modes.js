@@ -1,7 +1,28 @@
 import { buildBundles } from './timeline.js';
+import { classifyIntent } from './lib/fusion.js';
+import { isWebsiteMark } from './diagram.js';
 
 export const MODES = ['recording', 'live'];
 export const eventsForMode = (timeline, mode) => timeline.filter(event => event.mode === mode);
+
+// Keep a spoken move with its circled source until an arrow supplies the
+// destination. Otherwise live speech APPLY consumes the circle before the
+// following arrow can refer to it.
+export function awaitingMoveArrow(events, relations) {
+  const sources = events.filter(e => e.kind === 'stroke' && isWebsiteMark(e.payload));
+  const strokes = new Map(events.filter(e => e.kind === 'stroke').map(e => [e.payload.id, e]));
+  return events.some(turn => {
+    if (turn.kind !== 'transcript' || classifyIntent(turn.text) !== 'move') return false;
+    // A source drawn during recognition can settle after the spoken turn.
+    if (!sources.length) return true;
+    const during = sources.filter(e => e.t >= turn.t && e.t - turn.t <= 5000);
+    const source = (during.length ? during : sources).reduce((best, e) =>
+      Math.abs(e.t - turn.t) < Math.abs(best.t - turn.t) ? e : best);
+    return !relations.some(r => (r.kind === 'move' || r.kind === 'link') &&
+      r.from?.stroke === source.payload.strokes[0].id &&
+      Math.abs((strokes.get(r.arrow)?.t ?? Infinity) - turn.t) <= 5000);
+  });
+}
 
 const clock = ms => {
   const s = Math.floor(ms / 1000);

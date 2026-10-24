@@ -44,6 +44,7 @@ export function createMarkQueue({delay=MARK_SETTLE_DELAY_MS,onSettled,setTimer=s
   function schedule() { cancel();timer=setTimer(()=>{void settle();},delay); }
   return {
     hold:cancel,
+    clear() { cancel(); pending=[]; },
     add(stroke) {
       if (pending.length && makeMark([pending[0],stroke])) {
         pending.push(stroke);void settle();return;
