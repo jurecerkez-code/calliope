@@ -42,6 +42,8 @@ class StudioTest(unittest.TestCase):
         with server.STROKES_LOCK:
             server.STROKES.clear()
             server.MARKS.clear()
+            server.STROKE_SEEN.clear()
+            server.MARK_SEEN.clear()
         self.http = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
         self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
         self.thread.start()
@@ -484,6 +486,56 @@ class StudioTest(unittest.TestCase):
             self.assertNotIn(stroke['id'], server.STROKES)
             self.assertNotIn(stroke['id'], server.MARKS)
 
+    def test_expired_receipts_release_capacity_without_accepting_stale_apply(self):
+        stroke = self.stroke()
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
+                'strokes': [stroke]}
+        with patch('time.monotonic', return_value=100):
+            self.assertEqual(self.post('/api/strokes', stroke)[0], 201)
+            self.assertEqual(self.post('/api/marks', mark)[0], 201)
+        with patch('time.monotonic', return_value=3701):
+            self.assertEqual(self.post('/api/strokes', {**stroke, 'id': 'new-stroke'})[0], 201)
+            self.assertEqual(self.post('/api/marks', {**mark, 'id': 'new-stroke',
+                'strokes': [{**stroke, 'id': 'new-stroke'}]})[0], 201)
+            self.assertEqual(self.post('/api/strokes/readback', {'id': stroke['id']})[0], 404)
+            self.assertEqual(self.post('/api/marks/readback', {'id': mark['id']})[0], 404)
+            with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply') as agent:
+                code, _ = self.post('/api/apply', {'bundles': [{'transcript': 'change',
+                    'strokes': [mark]}], 'current_html': '<html>old</html>'})
+                self.assertEqual(code, 409)
+                agent.assert_not_called()
+
+    def test_full_receipt_store_recovers_after_expiry_but_not_before(self):
+        stroke = self.stroke()
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
+                'strokes': [stroke]}
+        with patch('time.monotonic', return_value=100):
+            for index in range(500):
+                item = {**stroke, 'id': f's-{index}'}
+                self.assertEqual(self.post('/api/strokes', item)[0], 201)
+                self.assertEqual(self.post('/api/marks', {**mark, 'id': item['id'], 'strokes': [item]})[0], 201)
+            self.assertEqual(self.post('/api/strokes', stroke)[0], 507)
+            self.assertEqual(self.post('/api/marks', mark)[0], 507)
+        with patch('time.monotonic', return_value=3701):
+            self.assertEqual(self.post('/api/strokes', stroke)[0], 201)
+            self.assertEqual(self.post('/api/marks', mark)[0], 201)
+        self.assertEqual(len(server.STROKES), 1)
+        self.assertEqual(len(server.MARKS), 1)
+
+    def test_readback_keeps_active_receipt_alive(self):
+        stroke = self.stroke()
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
+                'strokes': [stroke]}
+        with patch('time.monotonic', return_value=100):
+            self.assertEqual(self.post('/api/marks', mark)[0], 201)
+        with patch('time.monotonic', return_value=3500):
+            self.assertEqual(self.post('/api/marks/readback', {'id': mark['id']})[0], 200)
+        with patch('time.monotonic', return_value=3701):
+            self.assertEqual(self.post('/api/marks/readback', {'id': mark['id']})[0], 200)
+
     def test_cross_origin_post_cannot_invoke_agent_or_stage_content(self):
         request = {'bundles': [], 'current_html': '<html></html>'}
         with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply', return_value={'html': '<html></html>'}) as agent:
@@ -503,8 +555,8 @@ class StudioTest(unittest.TestCase):
             self.assertEqual(code, 200)
             agent.assert_called_once()
         with patch.object(server.Path, 'write_text') as write:
-            code, _ = self.post('/api/publish', {'html': '<html></html>'}, {'Origin': 'https://elsewhere.example'})
-            self.assertEqual(code, 403)
+            code, _ = self.post('/api/publish', {'html': '<html></html>'})
+            self.assertEqual(code, 404)
             write.assert_not_called()
         stroke = self.stroke()
         stroke['id'] = 'cross-origin-mark'
@@ -1311,11 +1363,10 @@ class StudioTest(unittest.TestCase):
         self.assertIn(receipt['agent_message'], sent)
 
     def test_built_studio_available_and_classic_retired(self):
-        with patch.dict(server.os.environ, {'CALLIOPE_REVIEW_MODE': '1'}):
-            with urlopen(self.url + '/api/config') as response:
-                self.assertFalse(json.load(response)['publishEnabled'])
-            code, _ = self.post('/api/publish', {'html': '<html>not staged</html>'})
-            self.assertEqual(code, 404)
+        with urlopen(self.url + '/api/config') as response:
+            self.assertNotIn('publishEnabled', json.load(response))
+        code, _ = self.post('/api/publish', {'html': '<html>not staged</html>'})
+        self.assertEqual(code, 404)
         with urlopen(self.url + '/') as response:
             html = response.read().decode()
             self.assertIn("script-src 'self'", response.headers['content-security-policy'])
