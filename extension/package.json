@@ -1,0 +1,9 @@
+{
+  "name": "draw-and-talk",
+  "private": true,
+  "type": "module",
+  "description": "Chrome extension. No build step and no dependencies; this file only enables `npm test` (Node's built-in test runner).",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}

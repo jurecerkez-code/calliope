@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Draw and Talk</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Draw and Talk</h1>
+    <span id="clock" class="clock" aria-label="Session time">0.0s</span>
+  </header>
+
+  <div id="banners" class="banners" role="status" aria-live="polite"></div>
+
+  <section class="card" aria-labelledby="h-draw">
+    <h2 id="h-draw">Draw</h2>
+    <div class="row">
+      <button id="btn-draw" class="btn primary" type="button" aria-pressed="false" title="Alt+Shift+D">Start drawing</button>
+      <button id="btn-undo" class="btn" type="button" title="Cmd/Ctrl+Z while drawing">Undo</button>
+    </div>
+    <fieldset class="seg" aria-label="Base">
+      <legend>Base</legend>
+      <label><input type="radio" name="base" value="live-dom" checked> Live page</label>
+      <label><input type="radio" name="base" value="screenshot"> Screenshot</label>
+    </fieldset>
+    <p class="hint" id="base-hint">Strokes are matched to elements on the live page.</p>
+  </section>
+
+  <section class="card" aria-labelledby="h-talk">
+    <h2 id="h-talk">Talk</h2>
+    <div class="row">
+      <button id="btn-voice" class="btn primary" type="button" aria-pressed="false" title="Alt+Shift+V">Start voice</button>
+      <span id="voice-state" class="muted">Reson8 live speech</span>
+    </div>
+    <p id="interim" class="interim" aria-live="polite" hidden></p>
+    <label class="say-label" for="say-text">Or type what you would say</label>
+    <div class="say">
+      <textarea id="say-text" rows="2" placeholder="this button should be green"></textarea>
+      <button id="btn-say" class="btn" type="button" title="Enter">Say</button>
+    </div>
+    <p class="hint">Typed words are stamped over the time you spent typing, ending when you press Say. No key or network needed.</p>
+  </section>
+
+  <section class="card" aria-labelledby="h-timeline">
+    <h2 id="h-timeline">Timeline</h2>
+    <div id="timeline" class="timeline" role="img" aria-label="Timeline of drawing, speech, and references"></div>
+  </section>
+
+  <section class="card" aria-labelledby="h-results">
+    <h2 id="h-results">Results</h2>
+    <ol id="utterances" class="list" aria-label="Utterances"></ol>
+    <h3>Strokes</h3>
+    <ol id="strokes" class="list" aria-label="Strokes"></ol>
+  </section>
+
+  <section class="card" aria-labelledby="h-export">
+    <h2 id="h-export">Export</h2>
+    <div class="row wrap">
+      <button id="btn-copy" class="btn primary" type="button" title="Alt+Shift+C">Copy packet</button>
+      <button id="btn-copy-png" class="btn" type="button">Copy PNG</button>
+      <button id="btn-download-png" class="btn" type="button">Download PNG</button>
+    </div>
+    <p class="hint">The PNG covers only the visible part of the page (a limit of tab capture).</p>
+    <textarea id="manual-copy" class="manual" rows="6" readonly hidden aria-label="Packet text to copy manually"></textarea>
+    <div class="row">
+      <button id="btn-reset" class="btn subtle" type="button">New session</button>
+      <a id="lnk-options" class="link" href="#">Options and API key</a>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p><kbd>Alt+Shift+D</kbd> draw · <kbd>Alt+Shift+V</kbd> voice · <kbd>Alt+Shift+C</kbd> copy · <kbd>Esc</kbd> stop drawing · <kbd>Enter</kbd> Say</p>
+  </footer>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>
