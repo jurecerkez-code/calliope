@@ -299,8 +299,6 @@ function scrollDown() {
 
 /* ---------------------------------------------------------------------- mic */
 
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-
 /* auto mode: apply shortly after each finished sentence, so the page moves with the talk */
 let autoOn = true;
 let autoTimer = null;
@@ -328,9 +326,20 @@ function buildWave() {
 }
 
 function tickWave() {
+  if (audio && audio.analyser) {
+    const data = new Uint8Array(audio.analyser.frequencyBinCount);
+    audio.analyser.getByteFrequencyData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i];
+    micLevel = Math.min(1, (sum / data.length) / 90);
+  }
   const bars = $('#wave').children;
-  for (const b of bars) {
-    const h = micOn ? 3 + Math.random() * 13 : 3;
+  const n = bars.length || 1;
+  for (let i = 0; i < n; i++) {
+    const b = bars[i];
+    const tilt = 0.45 + 0.55 * Math.sin((i / n) * Math.PI);
+    const jitter = micOn ? 0.6 + Math.random() * 0.4 : 0;
+    const h = micOn ? 3 + micLevel * 15 * tilt * jitter : 3;
     b.style.height = h.toFixed(1) + 'px';
   }
 }
@@ -345,44 +354,102 @@ function setMic(on) {
   if (on) { startedAt = startedAt || Date.now(); } else { startedAt = 0; }
 }
 
+/* Speech is Reson8, not the browser recognizer: the mic streams 16 kHz mono
+   PCM16 to our own relay, which holds the key and talks to the turns endpoint.
+   The browser only ever sees JSON turn events. */
+
+let audio = null;      // { ws, ctx, stream, analyser }
+let micLevel = 0;
+let cfg = null;
+
 async function startMic() {
-  if (!SR) {
-    feed('speech recognition needs Chrome', 'err');
+  if (!window.isSecureContext) {
+    feed('speech needs https or localhost', 'err');
     return;
   }
+  if (!cfg) {
+    try { cfg = await (await fetch('/api/config')).json(); }
+    catch (_) { feed('cannot reach the server', 'err'); return; }
+  }
   try {
-    await navigator.mediaDevices.getUserMedia({ audio: true });
+    audio = { stream: await navigator.mediaDevices.getUserMedia({ audio: true }) };
   } catch (err) {
     feed('mic permission denied', 'err');
     return;
   }
-  rec = new SR();
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.lang = 'en-US';
-  rec.onresult = (ev) => {
-    let interim = '';
-    for (let i = ev.resultIndex; i < ev.results.length; i++) {
-      const r = ev.results[i];
-      const txt = r[0].transcript.trim();
-      if (r.isFinal) { pushChunk(txt, true); } else { interim += txt + ' '; }
+
+  const port = cfg.audioPort;
+  const host = location.hostname || '127.0.0.1';
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + host + ':' + port);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => feed('reson8 link up · listening');
+  ws.onerror = () => feed('audio relay unreachable on :' + port, 'err');
+  ws.onclose = () => { if (micOn) { feed('reson8 link closed', 'err'); stopMic(); } };
+  // The turns endpoint puts the words on turn_end_candidate and sends a bare
+  // {"type":"turn_end"} when the pause is long enough — so the last candidate is
+  // what gets committed. Handle both shapes in case the API adds text later.
+  let lastCandidate = '';
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (_) { return; }
+    if (msg.error) { feed(String(msg.error).slice(0, 140), 'err'); return; }
+    const type = msg.type || '';
+    const text = (msg.text || '').trim();
+
+    if (type === 'turn_start') { lastCandidate = ''; pushChunk('', false); return; }
+
+    if (type === 'turn_end_candidate') {
+      if (text) { lastCandidate = text; pushChunk(text, false); }
+      return;
     }
-    if (interim) pushChunk(interim.trim(), false);
-  };
-  rec.onerror = (e) => {
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-      setMic(false); feed('mic blocked by browser', 'err');
+
+    if (type === 'turn_end') {
+      const finalText = text || lastCandidate;
+      if (finalText) pushChunk(finalText, true);
+      lastCandidate = '';
+      return;
     }
+
+    if (text) { lastCandidate = text; pushChunk(text, false); }
   };
-  rec.onend = () => { if (micOn) { try { rec.start(); } catch (_) {} } };
-  rec.start();
+
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  const src = ctx.createMediaStreamSource(audio.stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 256;
+  src.connect(analyser);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  proc.onaudioprocess = (e) => {
+    if (ws.readyState !== 1) return;
+    const f = e.inputBuffer.getChannelData(0);
+    const rate = ctx.sampleRate || 16000;
+    const n = rate === 16000 ? f.length : Math.floor(f.length * 16000 / rate);
+    const buf = new ArrayBuffer(n * 2);
+    const dv = new DataView(buf);
+    for (let i = 0; i < n; i++) {
+      const v = rate === 16000 ? f[i] : f[Math.floor(i * rate / 16000)];
+      dv.setInt16(i * 2, Math.max(-1, Math.min(1, v)) * 32767, true);
+    }
+    ws.send(buf);
+  };
+  src.connect(proc);
+  proc.connect(ctx.destination);
+
+  audio.ws = ws; audio.ctx = ctx; audio.analyser = analyser; audio.proc = proc;
   setMic(true);
   buildWave();
 }
 
 function stopMic() {
   micOn = false;
-  try { rec && rec.stop(); } catch (_) {}
+  if (audio) {
+    try { audio.ws && audio.ws.close(); } catch (_) {}
+    try { audio.stream && audio.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+    try { audio.ctx && audio.ctx.close(); } catch (_) {}
+  }
+  audio = null;
+  micLevel = 0;
   setMic(false);
 }
 

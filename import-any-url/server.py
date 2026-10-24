@@ -39,6 +39,14 @@ GROQ_MODEL = os.environ.get("CALLIOPE_GROQ_MODEL", "llama-3.3-70b-versatile")
 OPENROUTER_MODEL = os.environ.get("CALLIOPE_MODEL", "x-ai/grok-4.20")
 OPENROUTER_FALLBACK = os.environ.get("CALLIOPE_FALLBACK_MODEL", "x-ai/grok-4.7")
 
+# --- Reson8 speech to text (the same turns endpoint the studio uses) ------
+RESON8_TURNS = os.environ.get("CALLIOPE_RESON8_URL") or (
+    "wss://api.reson8.dev/v1/speech-to-text/turns"
+    "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
+    "&include_timestamps=true&eager_turn_probability=0.5&final_turn_probability=0.92"
+)
+AUDIO_PORT = int(os.environ.get("AUDIO_PORT", str(PORT + 1)))
+
 SYSTEM = """You are the edit engine behind a live webpage editor. A designer speaks and draws on a rendered website; you turn that into DOM operations that apply instantly.
 
 Return ONLY minified JSON, no fences, no prose:
@@ -88,6 +96,7 @@ def secret(name):
 
 GROQ_KEY = secret("GROQ_API_KEY")
 OPENROUTER_KEY = secret("OPENROUTER_API_KEY")
+RESON8_KEY = secret("RESON8_API_KEY")
 
 
 def providers():
@@ -328,6 +337,16 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "site": os.path.isfile(PAGE),
                 "chain": [{"provider": c[0], "model": c[2]} for c in chain],
+                "speech": "reson8" if RESON8_KEY else "none",
+                "audioPort": AUDIO_PORT,
+            })
+        if p == "/api/config":
+            chain = providers()
+            return self.j(200, {
+                "audioPort": AUDIO_PORT,
+                "speech": "reson8",
+                "provider": chain[0][0] if chain else None,
+                "model": chain[0][2] if chain else None,
             })
         return self.send(404, "not found", "text/plain")
 
@@ -441,12 +460,75 @@ class Handler(BaseHTTPRequestHandler):
             return self.j(500, {"error": str(e)})
 
 
+# ---------- audio relay: browser <-> Reson8 turns ----------
+# Same shape as the studio's relay: the browser streams 16 kHz mono PCM16, we
+# pump it to Reson8 with the key on our side, and pipe the turn events back.
+
+def start_audio():
+    try:
+        import asyncio
+        import threading
+
+        import websockets
+    except ImportError:
+        print("  speech: DISABLED — pip install websockets (RESON8_API_KEY %s)"
+              % ("is set" if RESON8_KEY else "is also missing"))
+        return
+
+    async def relay(browser):
+        if not RESON8_KEY:
+            try:
+                await browser.send(json.dumps({"error": "RESON8_API_KEY not set"}))
+            except Exception:
+                pass
+            return
+        try:
+            async with websockets.connect(
+                RESON8_TURNS,
+                additional_headers={"Authorization": "ApiKey " + RESON8_KEY},
+                max_size=None,
+            ) as r8:
+                async def up():
+                    async for msg in browser:
+                        await r8.send(msg)
+
+                async def down():
+                    async for msg in r8:
+                        await browser.send(msg)
+
+                _done, pending = await asyncio.wait(
+                    [asyncio.create_task(up()), asyncio.create_task(down())],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+        except Exception as e:
+            try:
+                await browser.send(json.dumps({"error": "reson8 relay: %s" % e}))
+            except Exception:
+                pass
+
+    async def serve():
+        async with websockets.serve(relay, "127.0.0.1", AUDIO_PORT, max_size=None):
+            await asyncio.Future()
+
+    def run():
+        try:
+            asyncio.run(serve())
+        except Exception as e:
+            print("  speech: audio relay failed: %s" % e)
+
+    threading.Thread(target=run, daemon=True).start()
+    print("  speech: reson8 relay on ws://127.0.0.1:%d" % AUDIO_PORT)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     chain = providers()
     print("calliope  http://127.0.0.1:%d" % PORT)
     print("  model chain: %s" % (" -> ".join("%s/%s" % (p, m) for p, _u, m, _k in chain) or "NONE (set GROQ_API_KEY)"))
     print("  imported page: %s" % ("ok" if os.path.isfile(PAGE) else "none yet — paste a link in the app"))
+    start_audio()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     srv.daemon_threads = True
     try:

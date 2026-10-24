@@ -8,13 +8,15 @@ live transcript. Draw on the page, say what you want, and it rewrites itself in
 about a second.
 
 ```bash
-cp .env.example .env   # GROQ_API_KEY (OPENROUTER_API_KEY optional fallback)
-python3 server.py      # http://127.0.0.1:8899
+python3 -m pip install --user "websockets>=12"   # only for the Reson8 relay
+cp .env.example .env   # GROQ_API_KEY, RESON8_API_KEY (OPENROUTER_API_KEY optional)
+python3 server.py      # http://127.0.0.1:8899  (audio relay on :8900)
 # or: ./run.sh         # starts the server and opens Chrome
 ```
 
-No `npm`, no build step, no port clash with the studio (8899 vs 8800) — both can
-run at once.
+No `npm`, no build step, no port clash with the studio (8899/8900 vs 8800/8801) —
+both can run at once. Without `websockets` the page still works; the mic is
+disabled and says why.
 
 Open **http://127.0.0.1:8899** in Chrome (speech recognition needs Chrome), paste a
 link, press **MIC**, talk, draw.
@@ -103,14 +105,30 @@ winner. Until then, `history` shows which model actually answered each edit
 If Groq errors, rate-limits, or returns unusable JSON, the request falls through
 to Grok (`x-ai/grok-4.20`, then `x-ai/grok-4.7`) instead of failing the edit.
 
-## Speech
+## Speech — Reson8, same as the studio
 
-Browser-native `webkitSpeechRecognition` — interim results are dim and instant,
-finals are solid, both timestamped on the same clock as your strokes. No audio
-leaves the machine except to the browser's own recognizer; no API key needed.
-Auto mode applies ~1.1s after each finished sentence.
+The mic is **not** the browser recognizer. The page captures 16 kHz mono PCM16
+(`AudioContext` + `ScriptProcessor`), streams it over a websocket to
+`ws://127.0.0.1:8900`, and that relay opens the Reson8 **turns** endpoint with the
+key on the server side — identical shape to the studio's relay, same query
+(`eager_turn_probability=0.5`, `final_turn_probability=0.92`,
+`include_timestamps=true`). The browser never sees the key.
 
-If mic permission is blocked, type in the box at the bottom instead — same path.
+Events map straight onto the transcript:
+
+| Reson8 event | In the UI |
+|---|---|
+| `turn_start` | clears the line, waveform rises |
+| `turn_end_candidate` | dim italic — the live guess |
+| `turn_end` | solid line — committed sentence, auto-apply fires ~1.1s later |
+
+Verified against the live endpoint: `turn_end` arrives **without** a `text` field, so
+the sentence to commit is the *last* `turn_end_candidate`. Reading `msg.text` off
+`turn_end` (as the studio's `audio.js` does) silently commits nothing. This client
+keeps the last candidate and commits it on `turn_end`, and still prefers `text` if
+the API ever starts sending it.
+
+Missing key or dead relay surfaces in the feed, not as a silent dead mic.
 
 ## Safety rails
 
@@ -125,7 +143,7 @@ If mic permission is blocked, type in the box at the bottom instead — same pat
 
 | File | What |
 |---|---|
-| `server.py` | static host, `/api/import`, `/api/edit` (model chain), `/api/publish` |
+| `server.py` | static host, `/api/import`, `/api/edit` (model chain), `/api/publish`, Reson8 audio relay |
 | `import_site.py` | fetch + sanitize a URL (also usable standalone) |
 | `static/index.html` | entry door + two-pane workspace |
 | `static/app.js` | importing, drawing, outline, transcript, ops application |
