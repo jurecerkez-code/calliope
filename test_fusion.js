@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bindReferences, classifyIntent, fuse, buildPacket, packetText, simulateWords } from '../lib/fusion.js';
-import { adaptMessage } from '../lib/reson8.js';
+import { bindReferences, classifyIntent, fuse, buildPacket, packetText, simulateWords } from './src/lib/fusion.js';
+import { adaptMessage } from './src/lib/reson8.js';
 
 const stroke = (id, startMs, endMs, label, extra = {}) => ({
   id, startMs, endMs, shape: 'closed-loop',
@@ -14,6 +14,8 @@ test('intent rules', () => {
   assert.equal(classifyIntent('this button should be green and more prominent'), 'modify');
   assert.equal(classifyIntent('put a summary chart here'), 'add');
   assert.equal(classifyIntent('move this over there'), 'move');
+  assert.equal(classifyIntent('put the headline here'), 'move');
+  assert.equal(classifyIntent('put the new chart here'), 'add');
   assert.equal(classifyIntent('remove that banner'), 'remove');
   assert.equal(classifyIntent('what does this do?'), 'query');
   assert.equal(classifyIntent('hmm'), 'unknown');
