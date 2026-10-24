@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calliope — paste a link, then talk to the page</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- ------------------------------------------------------------------ entry -->
+<div class="entry" id="entry">
+  <div class="entry-inner">
+    <img class="plate" src="/static/plate-muse.png" alt="Calliope, muse of eloquence">
+    <div class="entry-body">
+      <p class="kicker">DRAW &nbsp;·&nbsp; SPEAK &nbsp;·&nbsp; CONTEXT</p>
+      <h1>Paste a link.<br><em>Then talk to the page.</em></h1>
+      <form class="urlrow" id="urlform" autocomplete="off">
+        <input id="url" type="text" placeholder="meetjamie.ai" spellcheck="false" autocapitalize="off">
+        <button type="submit" id="load">Import</button>
+      </form>
+      <p class="err" id="urlerr"></p>
+      <div class="chips">
+        <span class="try">try</span>
+        <button class="chip" data-url="meetjamie.ai">meetjamie.ai</button>
+        <button class="chip" data-url="stripe.com">stripe.com</button>
+        <button class="chip" data-url="basecamp.com">basecamp.com</button>
+      </div>
+      <p class="fine">The raw HTML is fetched and served here — scripts stripped, so nothing re-renders over your edits. Server-rendered pages come through whole. Pages that build themselves in the browser arrive as an empty shell — Calliope tells you rather than letting you talk to a blank screen.</p>
+    </div>
+  </div>
+</div>
+
+<!-- -------------------------------------------------------------- workspace -->
+<div class="shell">
+
+  <aside class="rail">
+    <header class="brand">
+      <div class="mark">C</div>
+      <div class="brand-txt">
+        <strong>Calliope</strong>
+        <span id="status">ready · <em id="host">—</em></span>
+      </div>
+      <div class="pulse" id="pulse"></div>
+    </header>
+
+    <div class="micbar">
+      <button id="mic" class="micbtn" title="Toggle microphone (M)">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+        <span id="mictxt">MIC OFF</span>
+      </button>
+      <button id="auto" class="autobtn" title="Apply as you speak (A)">AUTO</button>
+      <div class="wave" id="wave" aria-hidden="true"></div>
+      <span class="clock" id="clock">00:00</span>
+    </div>
+
+    <div class="scroll" id="scroll">
+      <div class="empty" id="empty">
+        <p>Press <b>MIC</b>, then talk and draw on the page.</p>
+        <p class="dim">“Make that headline bigger.”<br>“Swap the hero image for something warmer.”<br>“Drop the pricing table in below this section.”</p>
+      </div>
+      <div class="chunks" id="chunks"></div>
+    </div>
+
+    <div class="feed" id="feed"></div>
+
+    <div class="composer">
+      <textarea id="typed" rows="1" placeholder="…or type the change and hit ⏎"></textarea>
+      <button id="apply" class="apply">
+        <span>APPLY</span><kbd>⌘⏎</kbd>
+      </button>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <div class="toolbar">
+      <button id="draw" class="tool" title="Toggle drawing (D)">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 20l4-1 10-10-3-3L5 16l-1 4Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        DRAW
+      </button>
+      <button id="newlink" class="tool ghost" title="Import a different page">↺ NEW LINK</button>
+      <div class="spacer"></div>
+      <span class="latency" id="latency"></span>
+      <button class="tool ghost" id="reset" title="Undo all edits">RESET</button>
+      <button class="tool ghost" id="export" title="Download edited HTML">EXPORT</button>
+      <button class="tool" id="publish" title="Stage the edited page">PUBLISH</button>
+    </div>
+
+    <div class="frame" id="frame">
+      <div class="warn" id="warn"></div>
+      <iframe id="site" title="Imported site"></iframe>
+      <canvas id="ink"></canvas>
+      <div class="hint" id="hint">press D to draw · ⌘↵ to apply</div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
