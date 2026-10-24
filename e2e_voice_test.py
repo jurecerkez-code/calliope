@@ -10,7 +10,7 @@
 3. Takes that real transcript together with a sketch bundle and sends it to the
    agent loop (/api/apply), printing the reasoning and the executed HTML.
 
-Run: uv run e2e_voice_test.py   (needs .env with RESON8_API_KEY and ANTHROPIC_API_KEY,
+Run: uv run e2e_voice_test.py   (needs .env with RESON8_API_KEY and LYCEUM_API_KEY,
                                 and `uv run server.py` running)
 """
 import asyncio

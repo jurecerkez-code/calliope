@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["websockets>=12"]
 # ///
-"""Calliope server: Reson8 turns relay + Anthropic reasoning/execution loop.
+"""Calliope server: Reson8 turns relay + Lyceum reasoning/execution loop.
 
 Run:  uv run server.py          (keys read from .env next to this file)
 Open: http://127.0.0.1:8800
@@ -36,8 +36,8 @@ if _env_file.exists():
             os.environ.setdefault(k.strip(), v.strip())
 
 RESON8_KEY = os.environ.get("RESON8_API_KEY", "")
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = os.environ.get("MODEL", "claude-sonnet-4-5")  # confirm exact id in the console
+LYCEUM_KEY = os.environ.get("LYCEUM_API_KEY", "")
+MODEL = os.environ.get("MODEL", "deepseek/deepseek-v4-flash-0731")
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
@@ -108,7 +108,7 @@ def valid_mark(mark):
             and strokes[0]['viewBox'] == strokes[1]['viewBox'])
 
 
-# ---------- Anthropic: REASON about the turn, then EXECUTE the website change ----------
+# ---------- Lyceum: REASON about the turn, then EXECUTE the website change ----------
 def _clip(v, n=200) -> str:
     return re.sub(r"[\x00-\x1f]", " ", str(v if v is not None else ""))[:n]
 
@@ -300,38 +300,55 @@ def build_agent_prompt(bundles: list, current_html: str, relations: list | None 
     )
     return prompt
 
-def claude_apply(bundles: list, current_html: str, prompt: str | None = None) -> dict:
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never forward the provider bearer token to a redirected host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None) -> dict:
     """Send the exact built message; return reasoning and updated HTML."""
     if prompt is None:
         prompt = build_agent_prompt(bundles, current_html)
     body = {
         "model": MODEL,
         "max_tokens": 8192,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        "reasoning_effort": "none",
+        "messages": [{"role": "user", "content": prompt}],
     }
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        "https://api.lyceum.technology/openai/v1/chat/completions",
         data=json.dumps(body).encode(),
         headers={
-            "x-api-key": ANTHROPIC_KEY,
-            "anthropic-version": "2023-06-01",
+            "Authorization": f"Bearer {LYCEUM_KEY}",
             "content-type": "application/json",
         },
     )
-    resp = json.load(urllib.request.urlopen(req, timeout=120))
-    text = "".join(b.get("text", "") for b in resp.get("content", [])).strip()
+    with urllib.request.build_opener(NoRedirect).open(req, timeout=120) as response:
+        resp = json.load(response)
+    choice = resp['choices'][0]
+    if choice.get('finish_reason') != 'stop':
+        raise ValueError('Lyceum returned no complete HTML answer')
+    text = (choice['message'].get('content') or '').strip()
     # tolerant JSON parse: strip code fences if the model wrapped the answer
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
-        return {"reasoning": text[:400], "html": current_html}
+        raise ValueError('Lyceum returned no complete HTML answer')
     try:
         out = json.loads(m.group(0))
-        html = out.get("html", "").strip()
+        html = out.get("html", "")
+        if not isinstance(html, str):
+            raise ValueError('Lyceum returned no complete HTML answer')
+        html = html.strip()
         if html.startswith("```"):
             html = re.sub(r"^```[a-z]*\n?|```$", "", html.strip())
-        return {"reasoning": out.get("reasoning", ""), "html": html or current_html}
-    except json.JSONDecodeError:
-        return {"reasoning": text[:400], "html": current_html}
+        if not (re.search(r'<html(?:\s|>)', html, re.IGNORECASE) and
+                re.search(r'</html\s*>\s*\Z', html, re.IGNORECASE)):
+            raise ValueError('Lyceum returned no complete HTML answer')
+        return {"reasoning": out.get("reasoning", ""), "html": html}
+    except json.JSONDecodeError as e:
+        raise ValueError('Lyceum returned no complete HTML answer') from e
 
 
 # ---------- HTTP ----------
@@ -475,10 +492,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {'error': 'invalid arrow relation for accepted marks'})
                 bundles, html = payload.get('bundles', []), payload.get('current_html', '')
                 prompt = build_agent_prompt(bundles, html, payload.get('relations', []))
-                if not ANTHROPIC_KEY:
+                if not LYCEUM_KEY:
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured',
                                             'agent_message': prompt})
-                out = claude_apply(bundles, html, prompt=prompt)
+                out = lyceum_apply(bundles, html, prompt=prompt)
                 out['agent_message'] = prompt
                 self._send(200, out)
             except Exception as e:  # surface the error to the UI, never crash the demo
@@ -540,7 +557,7 @@ async def _relay(websocket):
 async def main():
     threading.Thread(target=run_http, daemon=True).start()
     print(f"UI on http://127.0.0.1:{HTTP_PORT}  audio ws on :{AUDIO_PORT}")
-    print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  Anthropic key: {'set' if ANTHROPIC_KEY else 'MISSING'}")
+    print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  Lyceum key: {'set' if LYCEUM_KEY else 'MISSING'}")
     async with websockets.serve(audio_ws, "127.0.0.1", AUDIO_PORT, max_size=None):
         await asyncio.Future()
 
