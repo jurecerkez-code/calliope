@@ -38,6 +38,78 @@
 </style>
 </head>
 <body>
+<!-- VOICE-DRAW loading screen: sponsor logos, shiny and spinning -->
+<div id="vd-loader">
+  <div class="vd-stage">
+    <canvas id="vd3d"></canvas>
+    <div class="vd-tiles" aria-hidden="true">
+      <div class="vd-tile"><img src="assets/reson8-logo.png" alt="Reson8"></div>
+      <div class="vd-tile"><span class="vd-te">{Tech: Europe}</span></div>
+      <div class="vd-tile"><img src="assets/anthropic-a.svg" alt="Anthropic"></div>
+    </div>
+  </div>
+  <h1 class="vd-title">VOICE-DRAW</h1>
+  <p class="vd-sub">SPEAK + DRAW ON THE WEBSITE // THE AGENT SEES BOTH</p>
+  <div class="vd-bar"><i id="vdProg"></i></div>
+  <p class="vd-status">LOADING THE STUDIO</p>
+  <p class="vd-skip">CLICK ANYWHERE TO SKIP</p>
+</div>
+<style>
+  #vd-loader{position:fixed;inset:0;z-index:2147483647;background:
+    radial-gradient(900px 600px at 50% 30%, rgba(55,255,139,.08), transparent 65%),
+    radial-gradient(700px 500px at 80% 90%, rgba(76,201,240,.06), transparent 60%), #040505;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    cursor:pointer;transition:opacity .8s ease;font-family:"Cascadia Mono","SF Mono",Consolas,monospace;}
+  #vd-loader.vd-out{opacity:0;pointer-events:none;}
+  .vd-stage{position:relative;width:min(760px,86vw);height:320px;}
+  #vd3d{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  .vd-tiles{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:34px;
+    perspective:900px;transition:opacity .5s ease;}
+  #vd-loader.vd-3d .vd-tiles{opacity:0;}
+  .vd-tile{width:112px;height:132px;border-radius:18px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(160deg,#16241f,#0a1210);border:1px solid rgba(55,255,139,.28);
+    box-shadow:0 18px 50px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.12);
+    animation:vdspin 3.4s linear infinite;}
+  .vd-tile:nth-child(2){animation-delay:-1.7s;}
+  .vd-tile:nth-child(3){animation-delay:-3.4s;}
+  .vd-tile img{max-width:74%;max-height:46%;filter:brightness(0) invert(1);opacity:.95;}
+  .vd-te{color:#fff;font-size:11px;font-weight:700;text-align:center;letter-spacing:.02em;}
+  @keyframes vdspin{from{transform:rotateY(0deg);}to{transform:rotateY(360deg);}}
+  .vd-title{color:#37ff8b;font-size:clamp(30px,5vw,52px);letter-spacing:.32em;font-weight:700;
+    text-shadow:0 0 26px rgba(55,255,139,.45);padding-left:.32em;}
+  .vd-sub{color:#6f8f84;font-size:11px;letter-spacing:.18em;}
+  .vd-bar{width:min(380px,70vw);height:3px;background:#16302a;border-radius:2px;overflow:hidden;}
+  .vd-bar i{display:block;height:100%;width:8%;background:linear-gradient(90deg,#37ff8b,#4cc9f0);
+    border-radius:2px;transition:width .6s ease;animation:vdprog 3.2s ease-in-out forwards;}
+  @keyframes vdprog{to{width:82%;}}
+  .vd-status{color:#6f8f84;font-size:10px;letter-spacing:.22em;animation:vdblink 1.1s steps(1) infinite;}
+  @keyframes vdblink{50%{opacity:.25;}}
+  .vd-skip{color:#2c4a3f;font-size:9px;letter-spacing:.22em;}
+</style>
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/"}}
+</script>
+<script>
+(function(){
+  var loader = document.getElementById('vd-loader');
+  var done = false;
+  function finish(){
+    if(done) return;
+    done = true;
+    loader.classList.add('vd-out');
+    setTimeout(function(){ loader.style.display = 'none'; }, 850);
+    window.dispatchEvent(new Event('voicedraw:ready'));
+  }
+  window.vdFinishLoad = finish;
+  loader.addEventListener('click', finish);
+  window.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') finish();
+  });
+  setTimeout(finish, 9000); // failsafe: the loading screen can never trap the app
+  import('./loader3d.js').then(function(m){ m.start(document.getElementById('vd3d'), finish); })
+    .catch(function(){ /* WebGL or module failure: CSS splash stays, failsafe dismisses */ });
+})();
+</script>
 <header>
   <div class="rec"><span class="dot"></span>REC</div>
   <div style="color:var(--green)">CALLIOPE // SPEAK + DRAW ON THE WEBSITE</div>
