@@ -7,6 +7,17 @@ import { makeMark, createMarkQueue, MARK_SETTLE_DELAY_MS } from '../src/marks.js
 import { readFileSync } from 'node:fs';
 import { createAudio } from '../src/audio.js';
 
+test('loading screen uses only the lightweight CSS tiles', () => {
+  const loader = readFileSync(new URL('../src/Loader.svelte', import.meta.url), 'utf8');
+  const style = readFileSync(new URL('../src/loader.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8');
+  assert.match(loader, /class="vd-tiles"/);
+  assert.doesNotMatch(loader, /loader3d|vd3d|threeDimensional|<canvas/);
+  assert.doesNotMatch(html, /importmap|three\.module/);
+  assert.doesNotMatch(style, /perspective|rotateY|vd-3d|vd3d/);
+  assert.match(loader, /if \(t === 1\) finish\(\)/);
+});
+
 const pts = [[10,20], [25,30], [40,20]].map(([x,y]) => ({x,y,utc:'2026-10-24T12:00:00Z',selector:'button#download',text:'Download',rect:null}));
 
 test('one complete immutable stroke per timeline event, with ordered points and UTC', () => {
