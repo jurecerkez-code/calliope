@@ -1,5 +1,6 @@
 import { describeSketch } from './shape.js';
-import { fuse, DEFAULT_WINDOW } from '../extension/lib/fusion.js';
+import { bindReferences, classifyIntent, simulateWords, MS_PER_WORD, DEFAULT_WINDOW } from '../extension/lib/fusion.js';
+import { adaptMessage } from '../extension/lib/reson8.js';
 
 export function makePayload(stroke, t_end, viewport, enclosed_element) {
   const pts = stroke.pts.map(p => Object.freeze({...p, rect: p.rect && Object.freeze({...p.rect})}));
@@ -24,76 +25,86 @@ export function canApply(strokes, deliveries) {
   return strokes.every(stroke => deliveries[stroke.id] === 'accepted');
 }
 
-function strokeRef(p) {
-  return {
-    id: p.id, startMs: p.t, endMs: p.t_end ?? p.t, shape: p.shape,
-    anchor: p.bbox ? {x: Math.round(p.bbox.x + p.bbox.width/2), y: Math.round(p.bbox.y + p.bbox.height/2)} : null,
-    targets: []
+export function adaptTurn(final, candidate, audioStartMs, nowMs) {
+  const text = (final.text || candidate?.text || '').trim();
+  const sameWords = (a, b) => a.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(' ') ===
+    b.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(' ');
+  const finalWords = final.words?.length > 0;
+  const msg = {
+    ...candidate, ...final,
+    // Final word times supersede candidate bounds when final turn bounds are absent.
+    start_ms:final.start_ms ?? (finalWords ? null : candidate?.start_ms),
+    duration_ms:final.duration_ms ?? (finalWords ? null : candidate?.duration_ms),
+    // A corrected final transcript can reorder words without changing its length.
+    words:finalWords ? final.words :
+      sameWords(text, candidate?.text || '') ? candidate?.words : []
   };
-}
-
-// Deictic fusion over the naive chunks: "this/that/here/there" binds to the mark nearest
-// in time, a stroke goes to the utterance whose word points at it, unpointed strokes go to
-// the utterance nearest in time, and marks with no speech nearby keep their own bundle.
-// Without word timings the legacy chunking is returned unchanged.
-function fuseBundles(bundles) {
-  const speech = bundles.filter(b => b.words && b.words.length);
-  if (!speech.length) return bundles;
-  const allStrokes = [];
-  for (const b of bundles) for (const p of b.strokes) allStrokes.push(p);
-  const refs = allStrokes.map(strokeRef);
-  const utts = speech.map(b => ({
-    id: 'u'+b.t_start, text: b.transcript, startMs: b.t_start, endMs: Math.max(b.t_end, b.t_start),
-    words: b.words.map(w => typeof w === 'string' ? {text:w, startMs:b.t_start, endMs:b.t_end} : w)
-  }));
-  const fused = fuse(utts, refs);
-  const assign = new Map();
-  for (const u of fused) for (const r of u.references) {
-    if (r.strokeId && !assign.has(r.strokeId)) assign.set(r.strokeId, u.id);
+  const timed = audioStartMs != null && (msg.start_ms != null || msg.words?.length > 0);
+  const turn = adaptMessage({...msg, type:'transcript', text}, audioStartMs);
+  const tokens = text.split(/\s+/).filter(Boolean);
+  if (!timed) {
+    turn.endMs = nowMs;
+    turn.startMs = Math.max(0, nowMs - tokens.length * MS_PER_WORD);
+  } else if (turn.endMs <= turn.startMs && tokens.length) {
+    turn.endMs = turn.startMs + tokens.length * MS_PER_WORD;
   }
-  const win = DEFAULT_WINDOW, limit = Math.max(win.beforeMs, win.afterMs);
-  for (const r of refs) {
-    if (assign.has(r.id)) continue;
-    let best = null;
-    for (const u of fused) {
-      const d = r.endMs < u.startMs ? u.startMs - r.endMs : (r.startMs > u.endMs ? r.startMs - u.endMs : 0);
-      if (d <= limit && (!best || d < best.d)) best = {u, d};
-    }
-    if (best) assign.set(r.id, best.u.id);
-  }
-  const byUtt = new Map(fused.map(u => [u.id, {
-    t_start: u.startMs, t_end: u.endMs, transcript: u.text, strokes: [],
-    intent: u.intent, references: u.references, instruction: u.instruction
-  }]));
-  const orphan = [];
-  for (const p of allStrokes) {
-    const uid = assign.get(p.id);
-    if (uid && byUtt.has(uid)) byUtt.get(uid).strokes.push(p); else orphan.push(p);
-  }
-  const out = [...byUtt.values()].sort((a,b) => a.t_start - b.t_start);
-  if (orphan.length) out.unshift({
-    t_start: Math.min(...orphan.map(p => p.t)), t_end: Math.max(...orphan.map(p => p.t_end ?? p.t)),
-    transcript: '(sketch before any speech)', strokes: orphan
-  });
-  return out;
+  turn.words = timed && turn.words.length === tokens.length
+    ? turn.words.map((word, i) => ({...word, text:tokens[i]}))
+    : simulateWords(text, turn.startMs, turn.endMs);
+  return turn;
 }
 
 export function buildBundles(timeline) {
-  const events = timeline.slice().sort((a,b) => a.t - b.t);
-  const out = []; let chunk = null;
-  for (const e of events) {
-    if (e.kind === 'transcript') {
-      if (chunk) out.push(chunk);
-      chunk = {t_start:e.t, t_end:e.t_end ?? e.t, transcript:e.text, strokes:[], words:e.words || []};
-    } else if (chunk) {
-      chunk.strokes.push(e.payload);
-      chunk.t_end = Math.max(chunk.t_end, e.t_end || e.t);
-    } else {
-      chunk = {t_start:e.t, t_end:e.t_end || e.t, transcript:'(sketch before any speech)', strokes:[e.payload], words:[]};
+  const turns = timeline.filter(e => e.kind === 'transcript').map(e => ({
+    ...e, startMs:e.startMs ?? e.t, endMs:e.endMs ?? e.t_end ?? e.t,
+    words:e.words || []
+  }));
+  const marks = timeline.filter(e => e.kind === 'stroke').map(e => ({
+    id:e.payload.id, startMs:e.t, endMs:e.t_end ?? e.t, payload:e.payload
+  }));
+  const references = turns.map(turn => bindReferences(turn, marks));
+  const owner = new Map();
+  const markById = new Map(marks.map(mark => [mark.id, mark]));
+  const wordGap = (at, mark) => Math.max(0, mark.startMs - at, at - mark.endMs);
+  // A pointing word beats mere turn proximity. If two turns point at the same
+  // mark, the closer word wins rather than the earlier transcript arrival.
+  references.forEach((refs, i) => refs.forEach(ref => {
+    if (!ref.strokeId) return;
+    const distance = wordGap(ref.atMs, markById.get(ref.strokeId));
+    const previous = owner.get(ref.strokeId);
+    if (!previous || distance < previous.distance) owner.set(ref.strokeId, {index:i,distance});
+  }));
+  references.forEach((refs, i) => refs.forEach(ref => {
+    if (ref.strokeId && owner.get(ref.strokeId).index !== i) ref.strokeId = null;
+  }));
+  const gap = (turn, mark) => Math.max(0, turn.startMs - mark.endMs, mark.startMs - turn.endMs);
+  for (const mark of marks) {
+    if (owner.has(mark.id) || !turns.length) continue;
+    let best = null;
+    for (let i = 0; i < turns.length; i++) {
+      const distance = gap(turns[i], mark);
+      const limit = mark.endMs < turns[i].startMs ? DEFAULT_WINDOW.beforeMs : DEFAULT_WINDOW.afterMs;
+      if (distance <= limit && (best === null || distance < gap(turns[best], mark))) best = i;
     }
+    if (best !== null) owner.set(mark.id, {index:best});
   }
-  if (chunk) out.push(chunk);
-  return fuseBundles(out);
+  const bundles = turns.map((turn, i) => {
+    const mine = marks.filter(mark => owner.get(mark.id)?.index === i);
+    return {
+      t_start:Math.min(turn.startMs, ...mine.map(mark => mark.startMs)),
+      t_end:Math.max(turn.endMs, ...mine.map(mark => mark.endMs)),
+      transcript:turn.text, words:turn.words, intent:classifyIntent(turn.text),
+      references:references[i].map(({word,atMs,strokeId}) => ({word,atMs,strokeId})),
+      strokes:mine.map(mark => mark.payload)
+    };
+  });
+  const orphan = marks.filter(mark => !owner.has(mark.id));
+  if (orphan.length) bundles.push({
+    t_start:Math.min(...orphan.map(mark => mark.startMs)),
+    t_end:Math.max(...orphan.map(mark => mark.endMs)),
+    transcript:'(sketch without nearby speech)', strokes:orphan.map(mark => mark.payload)
+  });
+  return bundles.sort((a,b) => a.t_start - b.t_start);
 }
 
 const DEICTIC = /^(this|that|these|those|here|there)$/;

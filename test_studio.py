@@ -68,6 +68,17 @@ class StudioTest(unittest.TestCase):
         self.assertIn('around h1 "Draw together"', prompt)
         self.assertNotIn('SKETCH on:', prompt)
 
+    def test_reference_points_to_identifiable_sketch(self):
+        stroke = self.stroke()
+        stroke['id'] = 'during'
+        with patch.object(server.urllib.request, 'urlopen') as request:
+            request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
+            server.claude_apply([{'transcript':'make this green','strokes':[stroke],
+                                  'references':[{'word':'this','atMs':2750,'strokeId':'during'}]}],'<html></html>')
+            prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
+        self.assertIn('SKETCH during:',prompt)
+        self.assertIn('REFERENCE "this" -> during',prompt)
+
     def test_built_studio_available_and_classic_retired(self):
         with urlopen(self.url + '/') as response:
             html = response.read().decode()

@@ -106,7 +106,8 @@ def claude_apply(bundles: list, current_html: str) -> dict:
             touched = ', '.join(s.get('elements', [])) or 'background'
             target = f"around {center}" if shape in ('circle', 'square', 'triangle') and center else f"over {touched}"
 
-            description = (f"[{s.get('t', 0)}-{s.get('t_end', 0)}ms] "
+            sketch_id = f"SKETCH {s['id']}: " if s.get('id') else ''
+            description = (f"[{s.get('t', 0)}-{s.get('t_end', 0)}ms] {sketch_id}"
                            f"{name} drawn at {utc}, coordinates {bounds}, {target}. "
                            "Shape is an estimate, not the user's intent.")
             if shape in ('freehand', 'unknown'):
