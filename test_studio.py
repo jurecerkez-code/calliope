@@ -117,6 +117,11 @@ class StudioTest(unittest.TestCase):
             agent.assert_not_called()
 
     def test_built_studio_and_original_loader_available(self):
+        with patch.dict(server.os.environ, {'CALLIOPE_REVIEW_MODE': '1'}):
+            with urlopen(self.url + '/api/config') as response:
+                self.assertFalse(json.load(response)['publishEnabled'])
+            code, _ = self.post('/api/publish', {'html': '<html>not staged</html>'})
+            self.assertEqual(code, 404)
         with urlopen(self.url + '/') as response:
             html = response.read().decode()
             self.assertIn("script-src 'self'", response.headers['content-security-policy'])

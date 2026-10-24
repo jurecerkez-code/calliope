@@ -199,7 +199,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/config':
-            self._send(200, {'audioPort': AUDIO_PORT})
+            self._send(200, {'audioPort': AUDIO_PORT,
+                             'publishEnabled': os.environ.get('CALLIOPE_REVIEW_MODE') != '1'})
         elif self.path.startswith('/assets/') and ASSET_NAME.fullmatch(self.path[len('/assets/'):]):
             file = ASSETS / self.path[len('/assets/'):]
             if not file.is_file() or file.is_symlink() or file.stat().st_size > 2_000_000 or file.resolve().parent != ASSETS.resolve():
@@ -306,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # surface the error to the UI, never crash the demo
                 self._send(500, {"error": str(e)})
         elif self.path == "/api/publish":
+            if os.environ.get('CALLIOPE_REVIEW_MODE') == '1':
+                return self._send(404, {'error': 'not available in review'})
             # explicit and staged: nothing goes live from the meeting
             stage = HERE / "staging"
             stage.mkdir(exist_ok=True)
