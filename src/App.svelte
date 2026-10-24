@@ -10,11 +10,12 @@
   import { buildDiagram, buildCanvasPacket, canvasPacketText } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from '../extension/lib/fusion.js';
   let feed, prev, eq, boardEl;
-  let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
-  let rows = $state([]), tool = $state('pen'), typed = $state(''), busy = $state(false), micOn = $state(false);
+  let status = $state('CHOOSE HOW TO START.');
+  let rows = $state([]), tool = $state('pen'), typed = $state(''), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
+  let imported = $state(false);
   let secure = $state(false);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
-  let mode = $state('website'), said = $state(''), nodes = $state([]), edges = $state([]);
+  let mode = $state('start'), said = $state(''), nodes = $state([]), edges = $state([]);
   let board = null, canvasUtts = [], nextUtt = 1, typingStart = null;
   const started = Date.now();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
@@ -40,7 +41,7 @@
   function previewHtml(html){
     currentHtml=html;
     // CSP is applied before the untrusted document; no script permission in the iframe sandbox.
-    prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'none'; form-action 'none'">`+html.slice(0,200000);
+    prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https:; img-src data: https:; font-src https:; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri https:">`+html;
   }
   function previewLoaded(){drawing=attachDrawing(prev,{
     tool:()=>tool,elapsed,
@@ -53,6 +54,20 @@
     }
   });}
   function clearMarks(){drawing?.clear();addLine('fin','MARKS CLEARED');}
+  async function importUrl(event){
+    event.preventDefault();
+    if(busy)return;
+    busy=true;importError='';status='IMPORTING WEBSITE...';
+    try{
+      const response=await fetch('/api/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})});
+      const out=await response.json();
+      if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
+      imported=true;mode='website';drawing?.clear();timeline=[];deliveries={};typed='';
+      previewHtml(out.html);
+      addLine('fin','IMPORTED '+out.url);status='WEBSITE IMPORTED. DRAW OR SPEAK ON IT.';
+    }catch(err){importError=err.message;addLine('err','IMPORT FAILED: '+err.message);status='IMPORT FAILED. PREVIEW UNCHANGED.';}
+    finally{busy=false;}
+  }
   async function toggleMic(){
     if(micOn){audio?.stop();micOn=false;return;}
     try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
@@ -150,24 +165,34 @@
       }});
       secure=window.isSecureContext;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
-    previewHtml(currentHtml);
-    fetch('/jamie-mock.html').then(r=>{if(!r.ok)throw new Error('mock unavailable');return r.text();}).then(previewHtml).catch(()=>{});
     return ()=>audio?.destroy();
   });
 </script>
 
 <Loader />
 <header>
-  <div class="rec"><span class="dot"></span>REC</div>
-  <div class="brand">CALLIOPE // SPEAK + DRAW {mode==='canvas'?'TO EXPLAIN':'ON THE WEBSITE'}</div>
-  <div class="modes" role="group" aria-label="Canvas">
+  {#if mode!=='start'}<div class="rec"><span class="dot"></span>REC</div>{/if}
+  <div class="brand">CALLIOPE // SPEAK + DRAW {mode==='start'?'':mode==='canvas'?'TO EXPLAIN':'ON THE WEBSITE'}</div>
+  {#if mode!=='start'}<div class="modes" role="group" aria-label="Canvas">
     <Button id="modeWebsite" aria-pressed={mode==='website'} variant={mode==='website'?'amber':'default'} onclick={() => setMode('website')}>WEBSITE</Button>
     <Button id="modeCanvas" aria-pressed={mode==='canvas'} variant={mode==='canvas'?'amber':'default'} onclick={() => setMode('canvas')}>BLANK CANVAS</Button>
-  </div>
+  </div>{/if}
   <div id="status" role="status">{status}</div>
 </header>
-<main>
-  <section class="pane">
+<main class:starting={mode==='start'}>
+  <section class="startup" hidden={mode!=='start'} aria-label="Choose how to start">
+    <div class="startup-heading"><span>NEW SESSION / 01</span><h1>WHAT ARE WE WORKING ON?</h1><p>BRING A PUBLIC WEB PAGE, OR START WITH NOTHING BUT A CANVAS.</p></div>
+    <div class="startup-options">
+      <section class="startup-option"><span class="option-number">01 / WEBSITE</span><h2>START WITH A PAGE</h2><p>PASTE A PUBLIC URL. WE'LL BRING A SAFE PREVIEW INTO THE STUDIO.</p>
+        <form onsubmit={importUrl}><Input id="startUrl" aria-label="Website URL" placeholder="https://example.com" bind:value={url} /><Button type="submit" variant="amber" disabled={busy}>IMPORT WEBSITE ↗</Button></form>
+        {#if importError}<p class="startup-error" role="alert">IMPORT FAILED: {importError}</p>{/if}
+      </section>
+      <section class="startup-option"><span class="option-number">02 / CANVAS</span><h2>START FROM BLANK</h2><p>DRAW AND EXPLAIN A CONCEPT. NO WEBSITE NEEDED.</p>
+        <Button id="startBlank" onclick={() => setMode('canvas')}>START BLANK CANVAS ↗</Button>
+      </section>
+    </div>
+  </section>
+  <section class="pane" hidden={mode==='start'}>
     <h3>TRANSCRIPT + SKETCH LOG // ONE CLOCK</h3>
     <div id="feed" bind:this={feed}>
       {#each rows as row (row.key)}
@@ -205,5 +230,5 @@
     {/if}
   </section>
   <section class="pane" hidden={mode!=='canvas'}><h3>BLANK CANVAS // DRAW AND EXPLAIN</h3><div id="boardWrap"><svg id="board" bind:this={boardEl} role="img" aria-label="Drawing board"></svg></div></section>
-  <section class="pane" hidden={mode==='canvas'}><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe></div></section>
+  <section class="pane" hidden={mode!=='website'}><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><form class="row" onsubmit={importUrl}><Input id="url" aria-label="Website URL" placeholder="Paste a public website URL" bind:value={url} /><Button type="submit" disabled={busy}>IMPORT URL</Button></form><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe>{#if !imported}<p class="empty-preview">PASTE A PUBLIC URL ABOVE TO BEGIN.</p>{/if}</div></section>
 </main>
