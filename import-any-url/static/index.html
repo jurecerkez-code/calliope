@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calliope — paste a link</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<div class="entry" id="entry">
+  <div class="entry-inner">
+    <img class="plate" src="/static/plate-muse.png" alt="Calliope, muse of eloquence">
+    <div class="entry-body">
+      <p class="kicker">PASTE &nbsp;·&nbsp; IMPORT &nbsp;·&nbsp; EDIT</p>
+      <h1>Paste a link.<br><em>See the real page.</em></h1>
+      <form class="urlrow" id="urlform" autocomplete="off">
+        <input id="url" type="text" placeholder="meetjamie.ai" spellcheck="false" autocapitalize="off">
+        <button type="submit" id="load">Import</button>
+      </form>
+      <p class="err" id="urlerr"></p>
+      <div class="chips">
+        <span class="try">try</span>
+        <button class="chip" data-url="meetjamie.ai">meetjamie.ai</button>
+        <button class="chip" data-url="basecamp.com">basecamp.com</button>
+        <button class="chip" data-url="stripe.com">stripe.com</button>
+      </div>
+      <p class="fine">The raw HTML is fetched and served here — scripts stripped, so the page arrives as markup rather than a framework that redraws itself. Pages that build themselves in the browser come through empty, and are called out.</p>
+    </div>
+  </div>
+</div>
+
+<div class="stage">
+  <header class="bar">
+    <span class="bar-mark">C</span>
+    <span class="bar-host" id="host">no page yet</span>
+    <span class="spacer"></span>
+    <span class="bar-stat" id="stat"></span>
+    <button class="tool" id="newlink">↺ NEW LINK</button>
+  </header>
+  <div class="frame">
+    <div class="warn" id="warn"></div>
+    <iframe id="site" title="Imported site"></iframe>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
