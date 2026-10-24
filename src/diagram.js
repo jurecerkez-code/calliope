@@ -309,6 +309,12 @@ export function canvasPacketText(packet) {
 // a source that was circled later, even if both end up in the same APPLY turn.
 const MARK_SHAPES = new Set(["circle", "square", "triangle"]);
 
+export function isWebsiteMark(item) {
+	const p = item.strokes ? item.strokes[0] : item;
+	return item.shape !== "x" && (MARK_SHAPES.has(p.shape) ||
+		p.tool === "highlighter" || classifyShape(p.pts.map(q => ({ x: q.x, y: q.y }))) === "closed-loop");
+}
+
 export function websiteRelations(items) {
 	const marks = [];
 	const relations = [];
@@ -318,7 +324,7 @@ export function websiteRelations(items) {
 		const points = p.pts.map(q => ({ x: q.x, y: q.y }));
 		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
 		const target = (MARK_SHAPES.has(p.shape) && p.enclosed_element) || p.elements?.[0] || "";
-		if (MARK_SHAPES.has(p.shape) || p.tool === "highlighter" || classifyShape(points) === "closed-loop") {
+		if (isWebsiteMark(item)) {
 			marks.push({ id: p.id, bbox, target });
 		} else if (p.tool === "pen" && diag(bbox) > SMALL) {
 			const { from, to, tip } = connect(marks, p.pts);

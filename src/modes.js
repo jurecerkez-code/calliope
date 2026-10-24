@@ -1,7 +1,18 @@
 import { buildBundles } from './timeline.js';
+import { classifyIntent } from './lib/fusion.js';
+import { isWebsiteMark } from './diagram.js';
 
 export const MODES = ['recording', 'live'];
 export const eventsForMode = (timeline, mode) => timeline.filter(event => event.mode === mode);
+
+// Keep a spoken move with its circled source until an arrow supplies the
+// destination. Otherwise live speech APPLY consumes the circle before the
+// following arrow can refer to it.
+export function awaitingMoveArrow(events, relations) {
+  return events.some(e => e.kind === 'transcript' && classifyIntent(e.text) === 'move') &&
+    events.some(e => e.kind === 'stroke' && isWebsiteMark(e.payload)) &&
+    !relations.some(r => r.kind === 'move' || r.kind === 'link');
+}
 
 const clock = ms => {
   const s = Math.floor(ms / 1000);

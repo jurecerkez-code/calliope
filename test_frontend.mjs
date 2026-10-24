@@ -364,3 +364,28 @@ test('studio has no text instruction entry; mode events remain separate', async 
   assert.deepEqual(eventsForMode(events,'recording'), [recording]);
   assert.equal(events.length, 2);
 });
+
+test('a live move waits for its arrow without consuming a circled source at the speech boundary', async () => {
+  const { eventsForMode, awaitingMoveArrow } = await import('./src/modes.js');
+  const point=(x,y,selector='h1')=>({x,y,selector,text:'Destination'});
+  const source={id:'source',shape:'circle',t:10,strokes:[{id:'source',shape:'circle',tool:'pen',
+    bbox:{x:20,y:20,width:80,height:60},enclosed_element:'h1',
+    pts:[point(20,20),point(100,20),point(100,80),point(20,80),point(20,20)]}]};
+  const arrow={id:'arrow',shape:'freehand',t:30,strokes:[{id:'arrow',shape:'freehand',tool:'pen',
+    bbox:{x:25,y:60,width:195,height:0},pts:[point(25,60),point(220,60,'section#destination')]}]};
+  const events=[{kind:'stroke',mode:'live',payload:source},
+    {kind:'transcript',mode:'live',text:'move this',t:20},
+    {kind:'stroke',mode:'recording',payload:arrow}];
+  const live=eventsForMode(events,'live');
+  const before=websiteRelations(live.filter(e=>e.kind==='stroke').map(e=>e.payload));
+  assert.equal(awaitingMoveArrow(live,before),true);
+  const completed=[...live,{kind:'stroke',mode:'live',payload:arrow}];
+  const relations=websiteRelations(completed.filter(e=>e.kind==='stroke').map(e=>e.payload));
+  assert.equal(relations[0].kind,'move');
+  assert.equal(relations[0].from.stroke,'source');
+  assert.equal(awaitingMoveArrow(completed,relations),false);
+  const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
+  assert.match(app,/if\(awaitingMoveArrow\(sent,relations\)\)/);
+  assert.match(app,/deliver\(mark\)\.then\(requestApply\)/);
+  assert.match(app,/JSON\.stringify\(\{bundles,relations,current_html:currentHtml\}\)/);
+});

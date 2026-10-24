@@ -11,7 +11,7 @@
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
-  import { buildArtifact, createLiveQueue, eventsForMode } from './modes.js';
+  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow } from './modes.js';
   let feed, prev, eq, boardEl;
   let status = $state('CHOOSE HOW TO START.');
   let rows = $state([]), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
@@ -61,8 +61,12 @@
     rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
       .map(row=>row.key===mark.id?{...row,mark}:row);
     if(markMode==='live'){
-      const relation=websiteRelations(eventsForMode(timeline,'live').filter(e=>e.kind==='stroke').map(e=>e.payload)).find(r=>r.arrow===mark.id);
+      const live=eventsForMode(timeline,'live');
+      const relations=websiteRelations(live.filter(e=>e.kind==='stroke').map(e=>e.payload));
+      const relation=relations.find(r=>r.arrow===mark.id);
       if(relation)addLine('why',describeRelation(relation));
+      if(relation && mode==='website' && operation==='live' &&
+          live.some(e=>e.kind==='transcript') && !awaitingMoveArrow(live,relations))void deliver(mark).then(requestApply);
     }
     if(markMode==='live'&&mode==='website'&&operation==='live')return deliver(mark);
     updateRow(mark,markMode==='recording'?'RECORDED':'QUEUED FOR LIVE');
@@ -118,11 +122,13 @@
       const sent=eventsForMode(timeline,'live');
       const bundles=buildBundles(sent), marks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
       if(!bundles.length){status='NOTHING NEW FOR THE AGENT.';return;}
+      const relations=websiteRelations(marks).slice(0,50);
+      if(awaitingMoveArrow(sent,relations)){status='DRAW AN ARROW TO COMPLETE THE MOVE.';return;}
       await Promise.all(marks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
       status='ANTHROPIC IS REASONING...';
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations:websiteRelations(marks).slice(0,50),current_html:currentHtml})});
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations,current_html:currentHtml})});
       const out=await response.json();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT CONFIRMED SENT'} · FULL AGENT MESSAGE:\n${out.agent_message}`);
