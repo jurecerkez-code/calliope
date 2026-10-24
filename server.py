@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["websockets>=12"]
 # ///
-"""Voice-draw agent server: Reson8 turns relay + Anthropic reasoning/execution loop.
+"""Calliope server: Reson8 turns relay + Anthropic reasoning/execution loop.
 
 Run:  uv run server.py          (keys read from .env next to this file)
 Open: http://127.0.0.1:8800
