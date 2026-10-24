@@ -20,15 +20,15 @@
   let lanesData = $state({marks:[],words:[],links:[]});
   function refreshLanes(){lanesData=lanes(timeline);}
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
-  function addLine(cls,text){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed())}];scroll();}
+  function addLine(cls,text,options={}){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed()),...options}];scroll();}
   function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
   function scroll(){requestAnimationFrame(()=>{if(feed)feed.scrollTop=feed.scrollHeight;});}
   function rowText(stroke,state){const p=stroke.pts.at(-1);return `${stroke.summary?.text || stroke.tool.toUpperCase()+' '+p.x+', '+p.y+' · '+p.utc} · ${state}`;}
   function updateRow(mark,state,message){rows=rows.map(row=>{
     if(row.key!==mark.id)return row;
     const agentMessage=message ?? row.agentMessage;
-    return {...row,agentMessage,text:agentMessage
-      ? `${state} · AGENT SKETCH CONTEXT (FOR APPLY):\n${agentMessage}`
+    return {...row,agentMessage,copyText:agentMessage,state,text:agentMessage
+      ? `${state} · AGENT SKETCH CONTEXT (FOR APPLY)`
       : `${mark.shape.toUpperCase()} · ${mark.strokes.length} PATH${mark.strokes.length===1?'':'S'} · ${state}`};
   });scroll();}
   async function deliver(mark){
@@ -42,6 +42,10 @@
     }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
   }
   function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
+  function selectMessage(event){
+    const field=event.currentTarget.closest('.message-row').querySelector('textarea');
+    field.focus();field.select();
+  }
   const markQueue=createMarkQueue({onSettled:mark=>{
     timeline.push({kind:'stroke',t:mark.t,t_end:mark.t_end,payload:mark});
     refreshLanes();
@@ -98,7 +102,7 @@
       status='ANTHROPIC IS REASONING...';
       const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes:marks}]:bundles,current_html:currentHtml})});
       const out=await response.json();
-      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT CONFIRMED SENT'} · FULL AGENT MESSAGE:\n${out.agent_message}`);
+      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT CONFIRMED SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message});
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
       previewHtml(out.html);timeline=[];typed='';addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
@@ -141,8 +145,15 @@
     <h3>TRANSCRIPT + SKETCH LOG // ONE CLOCK</h3>
     <div id="feed" bind:this={feed}>
       {#each rows as row (row.key)}
-        {#if row.stroke}
-          <button type="button" class="coord" onclick={() => retry(row)}>{row.text}</button>
+        {#if row.copyText}
+          <div class="message-row">
+            <div class="message-head"><span class={row.cls}>{row.text}</span><button type="button" onclick={selectMessage}>SELECT TEXT</button></div>
+            <textarea readonly value={row.copyText} aria-label={row.stroke?'Sketch receipt text':'Full agent message text'}></textarea>
+            {#if row.state==='FAILED — CLICK TO RETRY'}<button type="button" onclick={() => retry(row)}>RETRY MARK</button>{/if}
+          </div>
+        {:else if row.stroke}
+          {#if row.state==='FAILED — CLICK TO RETRY'}<button type="button" class="coord" onclick={() => retry(row)}>{row.text}</button>
+          {:else}<div class="coord">{row.text}</div>{/if}
         {:else}
           <div><span class="t">[{row.clock}] </span><span class={row.cls}>{row.text}</span></div>
         {/if}

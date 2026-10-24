@@ -22,6 +22,14 @@ test('one complete immutable stroke per timeline event, with ordered points and 
   assert.equal(canApply([first,second], {a:'accepted',b:'accepted'}), true);
 });
 
+test('agent message rows select only the message, without status labels', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /copyText:agentMessage/);
+  assert.match(app, /copyText:out\.agent_message/);
+  assert.match(app, /readonly[^>]*value=\{row\.copyText\}/);
+  assert.match(app, /SELECT TEXT/);
+});
+
 test('a mark drawn during speech follows that utterance, including in the word lane', () => {
   const mark = makePayload({id:'during',tool:'pen',t:2600,pts,elements:['button#download']},2900,{width:949,height:2862},'');
   const timeline = [

@@ -177,8 +177,35 @@ class StudioTest(unittest.TestCase):
             prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
         self.assertIn('X', prompt)
         self.assertIn(message, prompt)
-        self.assertIn(first['path'], prompt)
-        self.assertIn(second['path'], prompt)
+        self.assertIn('2 ordered original paths', message)
+        for text in (message, prompt):
+            self.assertNotIn(first['path'], text)
+            self.assertNotIn(second['path'], text)
+            self.assertNotIn('"pts"', text)
+            self.assertNotIn('Stroke JSON:', text)
+
+    def test_freehand_receipt_and_agent_message_never_dump_points(self):
+        stroke = {**self.stroke(), 'shape': 'freehand', 'enclosed_element': ''}
+        mark = {'id': stroke['id'], 'shape': 'freehand', 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': '', 'strokes': [stroke]}
+        code, receipt = self.post('/api/marks', mark)
+        self.assertEqual(code, 201)
+        with patch.object(server, 'ANTHROPIC_KEY', ''):
+            code, unavailable = self.post('/api/apply', {
+                'bundles': [{'transcript': 'move this', 'strokes': [mark]}],
+                'current_html': '<html></html>'})
+        self.assertEqual(code, 503)
+        for text in (receipt['agent_message'], unavailable['agent_message']):
+            self.assertIn('Freehand mark', text)
+            self.assertIn('coordinates x 20–40, y 20–40', text)
+            self.assertIn('touched h1', text)
+            self.assertNotIn(stroke['path'], text)
+            self.assertNotIn('"pts"', text)
+            self.assertNotIn('point-level JSON:', text)
+            self.assertNotIn('<svg', text)
+        code, readback = self.post('/api/marks/readback', {'id': mark['id']})
+        self.assertEqual(code, 200)
+        self.assertEqual(readback['mark'], mark)
 
     def test_invalid_group_cannot_be_accepted_or_applied(self):
         first = self.stroke()
