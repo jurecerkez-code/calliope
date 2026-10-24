@@ -10,12 +10,13 @@
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
-  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents } from './modes.js';
+  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents, speechOnlyEvents } from './modes.js';
   const DEFAULT_WEBSITE_URL = 'https://www.meetjamie.ai/';
   let feed, prev, eq, boardEl, detailDialog;
   let detailField = $state(null);
   let selectedRow = $state(null);
   let status = $state('CHOOSE HOW TO START.');
+  let manualAction = $state('');
   let rows = $state([]), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
   let imported = $state(false);
   let secure = $state(false), publishEnabled = $state(true);
@@ -24,13 +25,26 @@
   let board = null, canvasUtts = [], nextUtt = 1, modeVersion = 0, speechCapture = null;
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
+  const sessionId = cryptoId();
+  let traceQueue = Promise.resolve(), traceWarned = false, traceFailed = false;
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
   let timeline = [], deliveries = {}, pending = {}, strokeModes = new Map(), drawing = null, audio = null, activeStroke = false, strokeWaiters = [], providerFailed = false;
   const elapsed = () => Date.now()-started;
 
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
   function addLine(cls,text,options={}){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed()),...options}];scroll();}
-  function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
+  function cryptoId(){const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
+  function trace(event,data){
+    traceQueue=traceQueue.then(async()=>{
+      const response=await fetch('/api/trace',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({session_id:sessionId,event,data})});
+      if(!response.ok)throw new Error('HTTP '+response.status);
+    }).catch(err=>{
+      traceFailed=true;
+      if(!traceWarned){traceWarned=true;addLine('err','SESSION TRACE FAILED: '+err.message);}
+    });
+    return traceQueue;
+  }
   function scroll(){requestAnimationFrame(()=>{if(feed)feed.scrollTop=feed.scrollHeight;});}
   function rowText(stroke,state){const p=stroke.pts.at(-1);return `${stroke.summary?.text || stroke.tool.toUpperCase()+' '+p.x+', '+p.y+' · '+p.utc} · ${state}`;}
   function updateRow(mark,state,message){rows=rows.map(row=>{
@@ -47,11 +61,11 @@
   async function send(mark){
     deliveries[mark.id]='sending';updateRow(mark,'SENDING');
     try {
-      const response=await fetch('/api/marks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(mark)});
+      const response=await fetch('/api/marks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...mark,session_id:sessionId})});
       const ack=await response.json();
       if(!response.ok||ack.status!=='accepted'||ack.id!==mark.id||typeof ack.agent_message!=='string')throw new Error(ack.error||'invalid receipt');
       deliveries[mark.id]='accepted';updateRow(mark,'ACCEPTED',ack.agent_message);
-    }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
+    }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);void trace('mark_failed',{mark,error:err.message});}
   }
   async function retry(row){
     if(row.mark && deliveries[row.mark.id]==='failed'){
@@ -75,6 +89,7 @@
   }
   const markQueue=createMarkQueue({onSettled:mark=>{
     const markMode=strokeModes.get(mark.id);
+    void trace('mark_captured',{mode:markMode,mark});
     for(const stroke of mark.strokes)strokeModes.delete(stroke.id);
     timeline.push({kind:'stroke',mode:markMode,t:mark.t,t_end:mark.t_end,payload:mark});
     rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
@@ -85,8 +100,12 @@
       const relation=relations.find(r=>r.arrow===mark.id);
       if(relation)addLine('why',describeRelation(relation));
       if(relation && mode==='website' && operation==='live' &&
-          live.some(e=>e.kind==='transcript') && !awaitingMoveArrow(live,relations))void deliver(mark).then(requestApply);
+          live.some(e=>e.kind==='transcript') && !awaitingMoveArrow(live,relations)){
+        manualAction='';
+        void deliver(mark).then(requestApply);
+      }
     }
+    if(markMode==='live'&&!providerFailed&&!timeline.some(e=>e.kind==='transcript'&&e.mode==='live'))manualAction='sketches';
     if(markMode==='live'&&mode==='website'&&operation==='live')return deliver(mark);
     updateRow(mark,markMode==='recording'?'RECORDED':'QUEUED FOR LIVE');
   }});
@@ -110,6 +129,7 @@
   function clearMarks(){
     if(busy||activeStroke)return;
     markQueue.clear();drawing?.clear();timeline=withoutMarks(timeline);deliveries={};pending={};strokeModes.clear();
+    if(manualAction==='sketches')manualAction='';
     addLine('fin','MARKS CLEARED');
   }
   async function importUrl(event){
@@ -117,19 +137,19 @@
     if(busy)return;
     busy=true;importError='';status='IMPORTING WEBSITE...';
     try{
-      const response=await fetch('/api/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:url.trim() || DEFAULT_WEBSITE_URL})});
+      const response=await fetch('/api/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:url.trim() || DEFAULT_WEBSITE_URL,session_id:sessionId})});
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       await markQueue.flush();
-      imported=true;mode='website';modeVersion++;drawing?.clear();timeline=[];deliveries={};pending={};strokeModes.clear();
-      previewHtml(out.html);
+      imported=true;mode='website';modeVersion++;drawing?.clear();timeline=[];deliveries={};pending={};strokeModes.clear();manualAction='';providerFailed=false;
+      previewHtml(out.html);void trace('preview_updated',{source:'import',url:out.url,elapsedMs:elapsed()});
       addLine('fin','IMPORTED '+out.url);status='WEBSITE IMPORTED. DRAW OR SPEAK ON IT.';
     }catch(err){importError=err.message;addLine('err','IMPORT FAILED: '+err.message);status='IMPORT FAILED. PREVIEW UNCHANGED.';}
     finally{busy=false;}
   }
   async function toggleMic(){
     if(micOn){audio?.stop();micOn=false;speechCapture=null;return;}
-    try{await audio.start();micOn=true;speechCapture={mode,operation};}catch(err){addLine('err','MIC FAILED: '+err.message);}
+    try{await audio.start();micOn=true;speechCapture={mode,operation};}catch(err){void trace('mic_error',{error:err.message});addLine('err','MIC FAILED: '+err.message);}
   }
   async function apply(force=false){
     if(mode!=='website'||operation!=='live'||busy||(!force&&providerFailed))return;
@@ -146,7 +166,9 @@
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       const live=eventsForMode(timeline,'live');
       const allRelations=websiteRelations(live.filter(e=>e.kind==='stroke').map(e=>e.payload));
-      const sent=nextLiveEvents(live,allRelations);
+      const selected=nextLiveEvents(live,allRelations);
+      const speechOnly=force&&manualAction==='speech-only';
+      const sent=speechOnly?speechOnlyEvents(selected):selected;
       if(!force&&!sent.some(e=>e.kind==='transcript'))return;
       const marks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
       const turn=sent.find(e=>e.kind==='transcript');
@@ -156,25 +178,31 @@
       const relations=allRelations.filter(r=>marks.some(mark=>mark.strokes.some(s=>s.id===r.from?.stroke))&&
         marks.some(mark=>mark.id===r.arrow)).slice(0,50);
       if(!force&&!relations.some(r=>r.kind==='move'||r.kind==='link')&&awaitingMoveArrow(sent,relations)){
-        status='DRAW AN ARROW TO COMPLETE THE MOVE, OR PRESS APPLY TO SEND SPEECH ONLY.';return;
+        void trace('apply_blocked',{reason:'waiting_for_arrow',turn:turn?.text,mark_ids:marks.map(mark=>mark.id)});
+        manualAction='speech-only';status='DRAW AN ARROW TO COMPLETE THE MOVE, OR SEND SPEECH ONLY.';return;
       }
       await Promise.all(marks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
-      if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
+      if(!canApply(marks,deliveries)){void trace('apply_blocked',{reason:'marks_not_accepted',mark_ids:marks.map(mark=>mark.id)});addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
       status='LYCEUM IS REASONING...';
+      manualAction='';
+      await traceQueue;
+      if(traceFailed)throw new Error('SESSION TRACE UNAVAILABLE — RELOAD BEFORE SENDING');
       invoked=true;
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations,current_html:currentHtml})});
+      const requestId=cryptoId();
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:sessionId,request_id:requestId,bundles,relations,current_html:currentHtml})});
       const out=await response.json();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message,state:response.ok?'SENT':'PREPARED / NOT SENT'});
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
-      previewHtml(out.html);timeline=timeline.filter(e=>!sent.includes(e));
+      previewHtml(out.html);void trace('preview_updated',{source:'agent',request_id:requestId,elapsedMs:elapsed()});timeline=timeline.filter(e=>!sent.includes(e));
       providerFailed=false;
       addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
+      if(!timeline.some(e=>e.kind==='transcript'&&e.mode==='live')&&timeline.some(e=>e.kind==='stroke'&&e.mode==='live'))manualAction='sketches';
       if(timeline.some(e=>e.kind==='transcript'&&e.mode==='live'))requestApply();
     }catch(err){if(mode==='website'&&operation==='live'&&modeVersion===runModeVersion){
-      if(invoked)providerFailed=true;
+      if(invoked){providerFailed=true;manualAction='retry';}
       addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';
     }}
     finally{busy=false;}
@@ -204,6 +232,7 @@
     return id;
   };
   function onCanvasStroke(stroke){
+    void trace('canvas_stroke',{stroke});
     const d=recompute();
     const n=d.nodes.find(x=>x.strokeId===stroke.id), e=d.edges.find(x=>x.strokeId===stroke.id||x.arrowhead===stroke.id);
     const a=d.annotations.find(x=>x.strokeId===stroke.id);
@@ -252,6 +281,8 @@
   function resumeLive(){
     const marks=eventsForMode(timeline,'live').filter(e=>e.kind==='stroke').map(e=>e.payload);
     marks.filter(mark=>!deliveries[mark.id]).forEach(deliver);
+    if(providerFailed)manualAction='retry';
+    else if(!eventsForMode(timeline,'live').some(e=>e.kind==='transcript')&&marks.length)manualAction='sketches';
     if(eventsForMode(timeline,'live').length)requestApply();
   }
   function setOperation(next){
@@ -264,17 +295,22 @@
     if(next==='live')void flushed.then(()=>{if(mode==='website'&&operation==='live'&&version===modeVersion)resumeLive();});
   }
   onMount(()=>{
+    void trace('session_started',{startedAt});
     board=attachBoard(boardEl,{elapsed,onStroke:onCanvasStroke});
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
-      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurnStart:()=>{
+      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onEvent:(name,data)=>trace(name,data),onTurnStart:()=>{
         speechCapture={mode,operation};
       },onTurn:turn=>{
         const origin=speechCapture ?? {mode,operation:'recording'};
         speechCapture={mode,operation};
+        void trace('turn_final',{mode:origin.mode,operation:origin.operation,turn});
         if(origin.mode==='canvas') addCanvasUtterance(turn,'reson8');
         else if(origin.mode==='website'){
           timeline.push({kind:'transcript',mode:origin.operation,t:turn.startMs,t_end:turn.endMs,text:turn.text,words:turn.words});
-          if(origin.operation==='live'&&mode==='website'&&operation==='live')requestApply();
+          if(origin.operation==='live'&&mode==='website'&&operation==='live'){
+            if(!providerFailed)manualAction='';
+            requestApply();
+          }
         }
       }});
       secure=window.isSecureContext;
@@ -313,6 +349,7 @@
   </section>
   <section class="pane" hidden={mode==='start'}>
     <h3>SESSION // MARKS + INSTRUCTIONS</h3>
+    <button type="button" class="session-item" onclick={() => openDetail({text:sessionId,copyText:sessionId,state:'TRACE ID'})}>TRACE ID: {sessionId}</button>
     <div id="feed" bind:this={feed}>
       {#each rows as row (row.key)}
         <button type="button" class="session-item" onclick={() => openDetail(row)}>
@@ -338,8 +375,8 @@
         <div class="session-tools"><Button id="btnCopyAgent" variant="amber" onclick={copyForAgent}>COPY FOR AGENT</Button><Button id="btnCopyPng" onclick={copyPng}>COPY PNG</Button><Button id="btnDownloadPng" onclick={downloadPng}>DOWNLOAD PNG</Button></div>
         <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
       {:else if operation==='live'}
-        <Button id="btnApply" variant="amber" disabled={busy} onclick={() => apply(true)}>APPLY ▸</Button>
-        <div class="notice">LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW WITH ITS MARKS. APPLY SENDS MARKS WITHOUT SPEECH. {#if !publishEnabled}REVIEW ONLY — APPLY SHOWS THE PREPARED MESSAGE, NOT A LIVE AGENT EDIT.{/if}</div>
+        {#if manualAction}<Button id="btnApply" variant="amber" disabled={busy} onclick={() => apply(true)}>{manualAction==='retry'?'RETRY AGENT':manualAction==='speech-only'?'SEND SPEECH ONLY':'SEND SKETCHES'} ▸</Button>{/if}
+        <div class="notice">LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY. SKETCHES WITHOUT SPEECH CAN BE SENT SEPARATELY. {#if !publishEnabled}REVIEW ONLY — AGENT REQUESTS SHOW THE PREPARED MESSAGE, NOT A LIVE EDIT.{/if}</div>
       {:else}
         <Button id="btnCopy" variant="amber" onclick={copyArtifact}>COPY ARTIFACT</Button>
         <div class="notice">RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.</div>

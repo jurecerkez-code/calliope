@@ -38,7 +38,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 
 1. **You draw on the website itself.** No separate whiteboard. Visible pen marks land on the preview; each completed stroke keeps its full path, UTC point times, DOM context, and a tentative shape label. Closed marks also get a best-effort element at their centre.
 2. **You speak while drawing.** Your microphone streams to Reson8. Dim lines are the live guess, solid lines are the committed sentence, all timestamped on the same clock as your marks.
-3. **The agent reasons, then executes in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It writes one short paragraph of reasoning, then returns updated HTML for the preview. Recording mode saves the same voice-and-mark timeline without calling the agent.
+3. **The agent changes the preview in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It returns updated HTML; no written reasoning is required. Recording mode saves the same voice-and-mark timeline without calling the agent.
 
 <p align="center">
   <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Lyceum, preview" width="900">
@@ -67,14 +67,14 @@ The canvas code is `src/board.js` (drawing surface and PNG) and `src/diagram.js`
 ## Website operation modes
 
 - **RECORDING** keeps voice and marks on one clock without changing the page or calling the agent. **COPY ARTIFACT** exports a Markdown transcript and JSON with marks and paths.
-- **LIVE** sends each committed spoken turn and its marks to the agent, which changes the preview. Marks alone wait for speech; **APPLY** sends them now. Switching modes keeps the two timelines separate.
+- **LIVE** sends each completed spoken turn and its marks to the agent automatically, which changes the preview. Marks alone wait for speech; contextual actions can send sketches or speech alone and retry a failed agent call. Switching modes keeps the two timelines separate.
 
 Website URL fields are for importing a page, not typing instructions. Voice and drawing are the only instruction inputs.
 
 ## Why this shape
 
 - **Chunks are the trick.** Short enough to react during a meeting, long enough to carry context. Each transcript chunk travels with the sketches made in its window. A stroke that crosses a boundary is sent whole, never cut in half.
-- **Words and marks are compared.** When you say "make it bigger" and circle a box, the agent gets both. When your words and your marks disagree, the reasoning step says so out loud.
+- **Words and marks are compared.** When you say "make it bigger" and circle a box, the agent gets both. It must resolve conflicts between words and marks before editing, but need not explain its decision.
 - **Nothing goes live from a meeting.** APPLY updates the preview; the studio has no publish control. A human decides when an idea is ready to leave the room.
 
 ## How it was built
@@ -110,7 +110,7 @@ The story of the build, in order, because the path is part of the answer.
 | Part | Technology | Why |
 |---|---|---|
 | Ears | **Reson8** speech to text, turns endpoint (API client: `calliope`) | Server side turn detection with timestamps, fast enough to react mid-meeting. Audio goes 16 kHz mono PCM through a small local relay so the API key never reaches the browser. |
-| Brain | **DeepSeek V4 Flash via Lyceum** | One call understands spoken intent plus drawing geometry plus the target elements, reasons about it in words, and writes the new HTML. |
+| Brain | **DeepSeek V4 Flash via Lyceum** | One call uses spoken intent, drawing geometry, and target elements to write the new HTML. |
 
 ## Run it
 
@@ -123,7 +123,15 @@ npm run build
 uv run server.py
 ```
 
-Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL (or leave it empty to import **https://www.meetjamie.ai/**) or **START BLANK CANVAS**; no page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live sends committed turns automatically; **APPLY** sends marks without speech. Without a Lyceum key, drawing works but APPLY reports that the agent is unavailable. Live marks are sent to the backend; failed deliveries can be retried, and APPLY refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test/test_studio.py` run the local checks.
+Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL (or leave it empty to import **https://www.meetjamie.ai/**) or **START BLANK CANVAS**; no page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live applies completed speech turns automatically; contextual actions send sketches or speech alone and retry agent calls. Without a Lyceum key, drawing works but agent calls report unavailable. Live marks are sent to the backend; failed deliveries can be retried, and an apply refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test/test_studio.py` run the local checks.
+
+### Session diagnostic trace
+
+The studio displays a **TRACE ID** for each browser session. The server writes an append-only JSONL file at `traces/<TRACE ID>.jsonl` by default. Set `CALLIOPE_TRACE_DIR` to an absolute, persistent directory outside a replaceable deployment release. The directory is owner-only (`0700`); each file is owner-only (`0600`). Do not expose traces via HTTP or commit them. Give an operator the TRACE ID to locate the file on the server.
+
+Each file is capped at 8 MB and the directory at 64 sessions. Archive or remove older files privately before the directory fills; a failed trace blocks new Live agent requests rather than silently sending an unlogged instruction. Reload the studio after fixing trace storage to start a new session.
+
+Events record final and candidate transcripts, empty turns and microphone errors; captured and accepted marks, receipts and failed delivery; imported HTML, complete agent prompts and request IDs; raw provider replies, errors, apply results and preview outcomes. These contain private page and meeting content. Raw microphone audio and API credentials are not logged. An older browser session without a TRACE ID cannot be reconstructed retroactively.
 
 To use a website as the studio canvas, paste its public URL on the opening screen and press **IMPORT WEBSITE**. You can import another URL later in website mode. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import keeps you on the opening screen or leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, and APPLY remain the studio's controls.
 
@@ -135,7 +143,7 @@ To use another website as the studio canvas, paste its public URL in **Website U
 
 | File | What it is |
 |---|---|
-| `server.py` | HTTP server, Reson8 audio relay, the reasoning and execution loop, staged publish |
+| `server.py` | HTTP server, Reson8 audio relay, the agent execution loop, staged publish |
 | `src/`, `frontend/`, `vite.config.mjs` | Svelte/Vite studio, Bits UI controls, drawing overlay, shape recognition, timeline, audio lifecycle, loader, blank canvas (`board.js`, `diagram.js`) |
 | `dist/` | Built studio served by Python; generated by `npm run build`, not checked in |
 | `jamie-mock.html` | A mock of the jamie.ai homepage for optional local demos; it is not loaded on startup |

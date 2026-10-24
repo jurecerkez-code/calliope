@@ -111,7 +111,7 @@ test('unpointed marks respect the before and after association windows', () => {
 test('audio maps stream-relative word times independently of turn start, even with sparse finals', async () => {
   const saved = new Map();
   const set = (key,value) => {saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});};
-  let socket, processor, received, starts=0;
+  let socket, processor, received, starts=0, audioEvents=[];
   class FakeSocket {constructor(){socket=this;this.readyState=1;}send(){}close(){}}
   try {
     set('window',{isSecureContext:true});set('location',{protocol:'http:',hostname:'127.0.0.1'});
@@ -125,7 +125,7 @@ test('audio maps stream-relative word times independently of turn start, even wi
       createScriptProcessor(){processor={connect(){}};return processor;}
       close(){}
     });
-    const audio=createAudio({getContext:()=>({fillRect(){}})},{port:8801,elapsed:()=>5000,onLine:()=>{},onTurnStart:()=>{starts++;},onTurn:turn=>{received=turn;}});
+    const audio=createAudio({getContext:()=>({fillRect(){}})},{port:8801,elapsed:()=>5000,onLine:()=>{},onEvent:(name,data)=>audioEvents.push({name,data}),onTurnStart:()=>{starts++;},onTurn:turn=>{received=turn;}});
     await audio.start();socket.onopen();
     processor.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(4096)}});
     socket.onmessage({data:JSON.stringify({type:'turn_start'})});
@@ -133,9 +133,12 @@ test('audio maps stream-relative word times independently of turn start, even wi
       {text:'make',start_ms:1000,duration_ms:200},{text:'this',start_ms:1300,duration_ms:200},{text:'green',start_ms:1700,duration_ms:300}
     ]})});
     socket.onmessage({data:JSON.stringify({type:'turn_end',text:'make this green',start_ms:null,duration_ms:null,words:[]})});
+    socket.onmessage({data:JSON.stringify({type:'turn_end',text:'',words:[]})});
     assert.deepEqual([received.startMs,received.endMs],[5744,6944]);
     assert.deepEqual(received.words[1],{text:'this',startMs:6044,endMs:6244});
     assert.equal(starts,1);
+    assert.deepEqual(audioEvents.map(event=>event.name),['turn_start','turn_candidate','turn_empty']);
+    assert.equal(audioEvents[1].data.text,'make this green');
     audio.destroy();
   } finally {
     for(const [key,d] of saved){if(d)Object.defineProperty(globalThis,key,d);else delete globalThis[key];}
@@ -192,7 +195,7 @@ test('Calliope retains its brand and preview controls without a publish action',
   assert.match(app, /CALLIOPE \/\/ SPEAK \+ DRAW/);
   assert.match(app, /id="btnApply"/);
   assert.doesNotMatch(app, /id="btnPublish"|\/api\/publish|async function publish\(/);
-  assert.match(app, /LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW/);
+  assert.match(app, /LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY/);
   assert.match(app, /REVIEW ONLY/);
   assert.match(app, /ack\.agent_message/);
   assert.match(app, /AGENT SKETCH CONTEXT/);
@@ -326,7 +329,7 @@ test('startup offers website import or a blank canvas without loading a demo sit
 test('empty website import uses the visible Jamie default, without importing on startup', () => {
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /const DEFAULT_WEBSITE_URL = 'https:\/\/www\.meetjamie\.ai\/'/);
-  assert.match(app, /JSON\.stringify\(\{url:url\.trim\(\) \|\| DEFAULT_WEBSITE_URL\}\)/);
+  assert.match(app, /JSON\.stringify\(\{url:url\.trim\(\) \|\| DEFAULT_WEBSITE_URL,session_id:sessionId\}\)/);
   assert.match(app, /id="startUrl"[^>]*placeholder=\{DEFAULT_WEBSITE_URL\}/);
   assert.doesNotMatch(app, /onMount\(\(\)=>\{[^]*?importUrl\(/);
 });
@@ -403,12 +406,22 @@ test('a move keeps its spoken source and a later arrow, not another turn', async
 
 test('the live studio triggers turn-scoped execution and waits for an active stroke', () => {
   const app=readFileSync(new URL('../src/App.svelte',import.meta.url),'utf8');
-  assert.match(app,/if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)requestApply\(\)/);
+  assert.match(app,/session_id:sessionId/);
+  assert.match(app,/const requestId=cryptoId\(\)/);
+  assert.match(app,/request_id:requestId/);
+  assert.match(app,/trace\('turn_final'/);
+  assert.match(app,/trace\('mark_captured',\{mode:markMode,mark\}\)/);
+  assert.match(app,/trace\('canvas_stroke',\{stroke\}\)/);
+  assert.match(app,/onEvent:\(name,data\)=>trace\(name,data\)/);
+  assert.match(app,/if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)\{/);
+  assert.match(app,/if\(!providerFailed\)manualAction='';\s*requestApply\(\)/);
   assert.match(app,/speechCapture=\{mode,operation\}/);
   assert.match(app,/nextLiveEvents\(live,allRelations\)/);
   assert.match(app,/strokeWaiters\.push\(resolve\)/);
   assert.match(app,/canApply\(marks,deliveries\)/);
   assert.match(app,/if\(!force&&!sent\.some\(e=>e\.kind==='transcript'\)\)return/);
+  assert.match(app,/speechOnly\?speechOnlyEvents\(selected\):selected/);
+  assert.match(app,/if\(traceFailed\)throw new Error\('SESSION TRACE UNAVAILABLE/);
   assert.match(app,/\(!force&&providerFailed\)/);
   assert.match(app,/if\(timeline\.some\(e=>e\.kind==='transcript'&&e\.mode==='live'\)\)requestApply\(\)/);
 });
@@ -417,7 +430,20 @@ test('studio offers a recording/live toggle', () => {
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /role="radiogroup"/);
   assert.match(app, /COPY ARTIFACT/);
-  assert.match(app, /if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)requestApply\(\)/);
+  assert.match(app, /if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)\{/);
+});
+
+test('speech-only escape submits a turn without its unfinished source mark', async () => {
+  const {nextLiveEvents,speechOnlyEvents}=await import('../src/modes.js');
+  const turn={kind:'transcript',mode:'live',text:'move this',t:100,t_end:200};
+  const source={kind:'stroke',mode:'live',t:120,t_end:130,payload:{id:'source',shape:'circle',
+    strokes:[{id:'source',shape:'circle',enclosed_element:'h1'}]}};
+  const timeline=[turn,source];
+  const selected=nextLiveEvents(timeline,[]);
+  assert.deepEqual(selected,[turn,source]);
+  const sent=speechOnlyEvents(selected);
+  assert.deepEqual(sent,[turn]);
+  assert.deepEqual(timeline.filter(e=>!sent.includes(e)),[source]);
 });
 
 test('studio has no text instruction entry; mode events remain separate', async () => {
@@ -470,6 +496,10 @@ test('a live move waits for its arrow without consuming a circled source at the 
   const app=readFileSync(new URL('../src/App.svelte',import.meta.url),'utf8');
   assert.match(app,/!relations\.some\(r=>r\.kind==='move'\|\|r\.kind==='link'\)&&awaitingMoveArrow\(sent,relations\)/);
   assert.match(app,/deliver\(mark\)\.then\(requestApply\)/);
-  assert.match(app,/onclick=\{\(\) => apply\(true\)\}/);
-  assert.match(app,/JSON\.stringify\(\{bundles,relations,current_html:currentHtml\}\)/);
+  assert.match(app, /\{#if manualAction\}/);
+  assert.match(app, /manualAction='retry'/);
+  assert.match(app, /manualAction='speech-only'/);
+  assert.match(app, /manualAction='sketches'/);
+  assert.doesNotMatch(app, />APPLY ▸<\/Button>/);
+  assert.match(app,/JSON\.stringify\(\{session_id:sessionId,request_id:requestId,bundles,relations,current_html:currentHtml\}\)/);
 });
