@@ -235,13 +235,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        elif self.path == '/classic.html':
-            data = (HERE / 'classic.html').read_bytes()
-            self.send_response(200)
-            self.send_header('content-type', 'text/html')
-            self.send_header('content-length', str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
         elif self.path == '/loader3d.js' or self.path.startswith('/vendor/') or self.path.startswith('/assets/'):
             relative = self.path.lstrip('/')
             if self.path.startswith('/assets/') and not re.fullmatch(r'assets/[\w.-]+\.(?:svg|png)', relative):

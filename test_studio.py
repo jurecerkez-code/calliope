@@ -164,7 +164,7 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(result['agent_message'], sent)
         self.assertIn(receipt['agent_message'], sent)
 
-    def test_built_studio_and_original_loader_available(self):
+    def test_built_studio_available_and_classic_retired(self):
         with patch.dict(server.os.environ, {'CALLIOPE_REVIEW_MODE': '1'}):
             with urlopen(self.url + '/api/config') as response:
                 self.assertFalse(json.load(response)['publishEnabled'])
@@ -174,8 +174,9 @@ class StudioTest(unittest.TestCase):
             html = response.read().decode()
             self.assertIn("script-src 'self'", response.headers['content-security-policy'])
         self.assertRegex(html, r'/assets/[^" ]+\.js')
-        with urlopen(self.url + '/classic.html') as response:
-            self.assertIn('vd-loader', response.read().decode())
+        with self.assertRaises(HTTPError) as error:
+            urlopen(self.url + '/classic.html')
+        self.assertEqual(error.exception.code, 404)
         for path in ('/src/App.svelte', '/assets/../server.py', '/assets/%2e%2e/server.py'):
             with self.subTest(path=path), self.assertRaises(HTTPError):
                 urlopen(self.url + path)
