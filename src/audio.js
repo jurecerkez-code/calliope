@@ -2,7 +2,7 @@
 // real audio timing (Reson8 start_ms / words) so marks and words share one clock.
 import { adaptTurn } from './timeline.js';
 
-export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, elapsed}) {
+export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, onEvent, elapsed}) {
   const ctx = canvas.getContext('2d');
   let ws=null, audioCtx=null, analyser=null, stream=null, frame=0;
   let lastCandidate=null, audioStartMs=null;
@@ -23,7 +23,7 @@ export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, elapsed}
   draw();
   function commit(msg){
     const text=(msg.text||lastCandidate?.text||'').trim();
-    if(!text){ lastCandidate=null; return; }
+    if(!text){ onEvent?.('turn_empty',{elapsedMs:now()});lastCandidate=null; return; }
     const utt=adaptTurn({...msg,text},lastCandidate,audioStartMs,now());
     lastCandidate=null;
     onTurn(utt);
@@ -42,15 +42,15 @@ export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, elapsed}
         ws.binaryType='arraybuffer';
         ws.onmessage=ev=>{
           const msg=JSON.parse(ev.data);
-          if(msg.error){onLine('err','ERROR: '+msg.error);return;}
+          if(msg.error){onEvent?.('mic_error',{error:msg.error});onLine('err','ERROR: '+msg.error);return;}
           const type=msg.type||'',text=msg.text||'';
-          if(type==='turn_end_candidate'){if(text){lastCandidate=msg;onLine('inter',text);}return;}
+          if(type==='turn_end_candidate'){if(text){lastCandidate=msg;onEvent?.('turn_candidate',{text,start_ms:msg.start_ms,duration_ms:msg.duration_ms,words:msg.words});onLine('inter',text);}return;}
           if(type==='turn_end'){commit(msg);return;}
-          if(type==='turn_start'){lastCandidate=null;onTurnStart?.();onLine('inter','(listening)');return;}
+          if(type==='turn_start'){lastCandidate=null;onEvent?.('turn_start',{elapsedMs:now()});onTurnStart?.();onLine('inter','(listening)');return;}
           if(text) onLine('inter',text);
         };
         ws.onopen=()=>{audioStartMs=null;lastCandidate=null;onLine('fin','RESON8 LINK UP (calliope). SPEAK.');};
-        ws.onerror=()=>onLine('err','AUDIO CONNECTION FAILED');
+        ws.onerror=()=>{onEvent?.('mic_error',{error:'audio connection failed'});onLine('err','AUDIO CONNECTION FAILED');};
         proc.onaudioprocess=e=>{
           if(ws?.readyState!==1)return;
           const f=e.inputBuffer.getChannelData(0),rate=audioCtx.sampleRate||16000;

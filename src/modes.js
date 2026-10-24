@@ -37,6 +37,9 @@ export function nextLiveEvents(events, relations) {
   return [turn,...marks.filter(e=>selected.has(e))];
 }
 
+// An incomplete move may be sent as words alone; retain its source mark.
+export const speechOnlyEvents = selected => selected.filter(e => e.kind === 'transcript');
+
 // Keep a spoken move with its circled source until an arrow supplies the
 // destination. Otherwise live speech APPLY consumes the circle before the
 // following arrow can refer to it.
