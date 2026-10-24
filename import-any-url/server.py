@@ -59,15 +59,27 @@ Rules:
 # ---------------------------------------------------------------- key handling
 
 def api_key():
+    """Env first, then .env files, matching how the rest of the repo reads keys."""
     k = os.environ.get("OPENROUTER_API_KEY")
     if k:
         return k.strip()
-    env = os.path.expanduser("~/.hermes/.env")
-    if os.path.isfile(env):
-        for line in open(env, encoding="utf-8", errors="replace"):
-            if line.startswith("OPENROUTER_API_KEY="):
-                return line.split("=", 1)[1].strip().strip("\"'")
-    raise RuntimeError("OPENROUTER_API_KEY not found (env or ~/.hermes/.env)")
+    candidates = [
+        os.path.join(HERE, ".env"),                 # import-any-url/.env
+        os.path.join(HERE, os.pardir, ".env"),      # repo root .env
+        os.path.expanduser("~/.hermes/.env"),
+    ]
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        try:
+            for line in open(path, encoding="utf-8", errors="replace"):
+                if line.strip().startswith("OPENROUTER_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip("\"'")
+        except OSError:
+            continue
+    raise RuntimeError(
+        "OPENROUTER_API_KEY not found — set it in the environment, or in "
+        "import-any-url/.env or the repo root .env")
 
 # ------------------------------------------------------------- model plumbing
 

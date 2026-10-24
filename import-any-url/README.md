@@ -8,9 +8,13 @@ live transcript. Draw on the page, say what you want, and it rewrites itself in
 about a second.
 
 ```bash
+cp .env.example .env   # add OPENROUTER_API_KEY (or use the repo root .env)
 python3 server.py      # http://127.0.0.1:8899
 # or: ./run.sh         # starts the server and opens Chrome
 ```
+
+No `npm`, no `uv`, no build step, no port clash with the studio (8899 vs 8800) —
+both can run at once.
 
 Open **http://127.0.0.1:8899** in Chrome (speech recognition needs Chrome), paste a
 link, press **MIC**, talk, draw.
@@ -66,6 +70,9 @@ letting you talk to a blank page. There is no server-side guess to get wrong:
 
 Refused outright: non-`http(s)` schemes, unqualified hosts, private/loopback
 addresses (SSRF), non-HTML content types, and pages over 6 MB.
+
+The key is read from the environment first, then `import-any-url/.env`, the repo
+root `.env`, or `~/.hermes/.env` — same convention as the studio server.
 
 ## Why this model
 
