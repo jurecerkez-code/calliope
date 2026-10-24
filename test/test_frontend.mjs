@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBundles, makePayload, canApply, lanes, adaptTurn, withoutMarks } from './src/timeline.js';
-import { websiteRelations } from './src/diagram.js';
-import { describeSketch } from './src/shape.js';
-import { makeMark, createMarkQueue, MARK_SETTLE_DELAY_MS } from './src/marks.js';
+import { buildBundles, makePayload, canApply, lanes, adaptTurn, withoutMarks } from '../src/timeline.js';
+import { websiteRelations } from '../src/diagram.js';
+import { describeSketch } from '../src/shape.js';
+import { makeMark, createMarkQueue, MARK_SETTLE_DELAY_MS } from '../src/marks.js';
 import { readFileSync } from 'node:fs';
-import { createAudio } from './src/audio.js';
+import { createAudio } from '../src/audio.js';
 
 const pts = [[10,20], [25,30], [40,20]].map(([x,y]) => ({x,y,utc:'2026-10-24T12:00:00Z',selector:'button#download',text:'Download',rect:null}));
 
@@ -24,7 +24,7 @@ test('one complete immutable stroke per timeline event, with ordered points and 
 });
 
 test('session rows open the full text on demand, separate from their compact labels', () => {
-  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /copyText:agentMessage/);
   assert.match(app, /copyText:out\.agent_message/);
   assert.match(app, /state:response\.ok\?'SENT':'PREPARED \/ NOT SENT'/);
@@ -61,7 +61,7 @@ test('the visible link ends at its actual mark, not below the pointing word', ()
   ]);
   assert.equal(data.links[0].markAtMs, 2750);
   assert.notEqual(data.links[0].markAtMs, data.links[0].atMs);
-  const component = readFileSync(new URL('./src/Lanes.svelte', import.meta.url), 'utf8');
+  const component = readFileSync(new URL('../src/Lanes.svelte', import.meta.url), 'utf8');
   assert.match(component, /x2="\{g\.x\(l\.markAtMs\)\}"/);
 });
 
@@ -188,7 +188,7 @@ test('bundled shape interpreter keeps the enclosed DOM target and natural-langua
 });
 
 test('Calliope retains its brand and preview controls without a publish action', () => {
-  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /CALLIOPE \/\/ SPEAK \+ DRAW/);
   assert.match(app, /id="btnApply"/);
   assert.doesNotMatch(app, /id="btnPublish"|\/api\/publish|async function publish\(/);
@@ -252,7 +252,7 @@ test('clearing marks drops pending delivery and removes accepted marks without d
   assert.deepEqual(cleared,[timeline[0]]);
   assert.deepEqual(buildBundles(cleared)[0].strokes,[]);
   assert.deepEqual(websiteRelations(cleared.filter(e=>e.kind==='stroke').map(e=>e.payload)),[]);
-  const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
+  const app=readFileSync(new URL('../src/App.svelte',import.meta.url),'utf8');
   assert.match(app,/markQueue\.clear\(\);drawing\?\.clear\(\);timeline=withoutMarks\(timeline\);deliveries=\{\}/);
 });
 
@@ -271,7 +271,7 @@ test('a natural pause between X strokes does not send the first one', async () =
   assert.equal(sent.length,1);
   assert.equal(sent[0].shape,'x');
   assert.deepEqual(sent[0].strokes,[first,second]);
-  assert.match(readFileSync(new URL('./src/App.svelte', import.meta.url),'utf8'),/WAITING UP TO.*NEXT STROKE/);
+  assert.match(readFileSync(new URL('../src/App.svelte', import.meta.url),'utf8'),/WAITING UP TO.*NEXT STROKE/);
 });
 
 test('expiry sends a single mark; unrelated strokes remain separate messages', async () => {
@@ -295,16 +295,16 @@ test('expiry sends a single mark; unrelated strokes remain separate messages', a
 });
 
 test('studio exposes URL import in its existing preview', () => {
-  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /\/api\/import/);
   assert.match(app, /aria-label="Website URL"/);
   assert.match(app, /previewHtml\(out\.html\)/);
 });
 
 test('both studio surfaces draw pen only, without a tool switch', () => {
-  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
-  const drawing = readFileSync(new URL('./src/drawing.js', import.meta.url), 'utf8');
-  const board = readFileSync(new URL('./src/board.js', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const drawing = readFileSync(new URL('../src/drawing.js', import.meta.url), 'utf8');
+  const board = readFileSync(new URL('../src/board.js', import.meta.url), 'utf8');
   assert.doesNotMatch(app, /btnTool|highlighter/);
   assert.doesNotMatch(drawing, /highlighter/);
   assert.doesNotMatch(board, /highlighter/);
@@ -315,7 +315,7 @@ test('both studio surfaces draw pen only, without a tool switch', () => {
 });
 
 test('startup offers website import or a blank canvas without loading a demo site', () => {
-  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /mode = \$state\('start'\)/);
   assert.match(app, /START BLANK CANVAS/);
   assert.match(app, /IMPORT WEBSITE/);
@@ -324,7 +324,7 @@ test('startup offers website import or a blank canvas without loading a demo sit
 });
 
 test('recording artifact keeps words and marks on one clock, as markdown plus JSON', async () => {
-  const { buildArtifact } = await import('./src/modes.js');
+  const { buildArtifact } = await import('../src/modes.js');
   assert.equal(buildArtifact([]), '');
   const stroke = makePayload({id:'s1', tool:'pen', t:2500, pts, elements:['button#download']}, 3100, {width:949,height:2862}, '');
   const mark = makeMark([stroke]);
@@ -342,7 +342,7 @@ test('recording artifact keeps words and marks on one clock, as markdown plus JS
 });
 
 test('live queue never runs two agent calls at once and re-runs once for requests made mid-flight', async () => {
-  const { createLiveQueue } = await import('./src/modes.js');
+  const { createLiveQueue } = await import('../src/modes.js');
   let calls = 0, active = 0, maxActive = 0, release;
   const request = createLiveQueue(async () => {
     calls++; active++; maxActive = Math.max(maxActive, active);
@@ -358,7 +358,7 @@ test('live queue never runs two agent calls at once and re-runs once for request
 });
 
 test('live requests select one completed turn and only its captured sketches', async () => {
-  const { nextLiveEvents } = await import('./src/modes.js');
+  const { nextLiveEvents } = await import('../src/modes.js');
   const first={kind:'transcript',mode:'live',text:'change the heading',t:100,t_end:200};
   const second={kind:'transcript',mode:'live',text:'change the button',t:300,t_end:400};
   const mark=(id,t,t_end)=>({kind:'stroke',mode:'live',t,t_end,payload:{id}});
@@ -370,7 +370,7 @@ test('live requests select one completed turn and only its captured sketches', a
 });
 
 test('a move keeps its spoken source and a later arrow, not another turn', async () => {
-  const { nextLiveEvents, awaitingMoveArrow } = await import('./src/modes.js');
+  const { nextLiveEvents, awaitingMoveArrow } = await import('../src/modes.js');
   const source={kind:'stroke',mode:'live',t:100,t_end:125,payload:{id:'source',shape:'circle',
     strokes:[{id:'source',shape:'circle'}]}};
   const turn={kind:'transcript',mode:'live',t:140,t_end:170,text:'move this'};
@@ -394,7 +394,7 @@ test('a move keeps its spoken source and a later arrow, not another turn', async
 });
 
 test('the live studio triggers turn-scoped execution and waits for an active stroke', () => {
-  const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
+  const app=readFileSync(new URL('../src/App.svelte',import.meta.url),'utf8');
   assert.match(app,/if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)requestApply\(\)/);
   assert.match(app,/speechCapture=\{mode,operation\}/);
   assert.match(app,/nextLiveEvents\(live,allRelations\)/);
@@ -406,20 +406,20 @@ test('the live studio triggers turn-scoped execution and waits for an active str
 });
 
 test('studio offers a recording/live toggle', () => {
-  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /role="radiogroup"/);
   assert.match(app, /COPY ARTIFACT/);
   assert.match(app, /if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)requestApply\(\)/);
 });
 
 test('studio has no text instruction entry; mode events remain separate', async () => {
-  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.doesNotMatch(app, /\btyped\b|saySimulated|id="instr"|id="said"|type a note|type an instruction/);
   assert.match(app, /modeVersion!==runModeVersion/);
   assert.match(app, /strokeModes\.set\(stroke\.id,operation\)/);
   assert.match(app, /kind:'stroke',mode:markMode/);
   assert.match(app, /if\(markMode==='live'&&mode==='website'&&operation==='live'\)return deliver\(mark\)/);
-  const { eventsForMode } = await import('./src/modes.js');
+  const { eventsForMode } = await import('../src/modes.js');
   const live = {kind:'transcript',mode:'live',t:1,text:'change the page'};
   const recording = {kind:'transcript',mode:'recording',t:2,text:'just record this'};
   const events = [live, recording];
@@ -429,7 +429,7 @@ test('studio has no text instruction entry; mode events remain separate', async 
 });
 
 test('a live move waits for its arrow without consuming a circled source at the speech boundary', async () => {
-  const { eventsForMode, awaitingMoveArrow } = await import('./src/modes.js');
+  const { eventsForMode, awaitingMoveArrow } = await import('../src/modes.js');
   const point=(x,y,selector='h1')=>({x,y,selector,text:'Destination'});
   const source={id:'source',shape:'circle',t:10,strokes:[{id:'source',shape:'circle',tool:'pen',
     bbox:{x:20,y:20,width:80,height:60},enclosed_element:'h1',
@@ -459,7 +459,7 @@ test('a live move waits for its arrow without consuming a circled source at the 
     {kind:'stroke',mode:'live',t:11300,payload:source},
     {kind:'stroke',mode:'live',t:12000,payload:arrow}];
   assert.equal(awaitingMoveArrow(duringSpeech,[{kind:'move',from:{stroke:'source'},arrow:'arrow'}]),false);
-  const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
+  const app=readFileSync(new URL('../src/App.svelte',import.meta.url),'utf8');
   assert.match(app,/!relations\.some\(r=>r\.kind==='move'\|\|r\.kind==='link'\)&&awaitingMoveArrow\(sent,relations\)/);
   assert.match(app,/deliver\(mark\)\.then\(requestApply\)/);
   assert.match(app,/onclick=\{\(\) => apply\(true\)\}/);

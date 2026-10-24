@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDiagram, buildCanvasPacket, canvasPacketText, nameFrom, edgeLabelFrom, toMermaid } from './src/diagram.js';
-import { simulateWords } from './src/lib/fusion.js';
-import { makePayload } from './src/timeline.js';
+import { buildDiagram, buildCanvasPacket, canvasPacketText, nameFrom, edgeLabelFrom, toMermaid } from '../src/diagram.js';
+import { simulateWords } from '../src/lib/fusion.js';
+import { makePayload } from '../src/timeline.js';
 
 // Strokes as a person would draw them: t in ms on the session clock.
 function rect(id, x, y, w, h, t0) {
@@ -80,7 +80,7 @@ const ring = (cx, cy, r) => Array.from({ length: 40 }, (_, i) => ({ x: cx + r * 
 const stroke = (x1, y1, x2, y2, endSelector) => Array.from({ length: 21 }, (_, i) => ({ x: x1 + ((x2 - x1) * i) / 20, y: y1 + ((y2 - y1) * i) / 20, selector: i === 20 ? endSelector : 'main' }));
 
 test('website: arrow from a circled element to empty space is a move', async () => {
-  const { websiteRelations } = await import('./src/diagram.js');
+  const { websiteRelations } = await import('../src/diagram.js');
   const marks = [
     payload('a', 'pen', 'circle', ring(200, 200, 50), { enclosed_element: 'button.btn "Download"' }),
     payload('b', 'pen', 'freehand', stroke(210, 210, 700, 500, 'section.stat'), { elements: ['main'] }),
@@ -92,7 +92,7 @@ test('website: arrow from a circled element to empty space is a move', async () 
 });
 
 test('website: arrow between a highlight and a circle is a link; a stroke inside one mark is nothing', async () => {
-  const { websiteRelations } = await import('./src/diagram.js');
+  const { websiteRelations } = await import('../src/diagram.js');
   const hl = payload('h', 'highlighter', 'highlight', stroke(100, 100, 300, 100, 'h1'), { elements: ['h1'] });
   const circle = payload('c', 'pen', 'circle', ring(700, 300, 60), { enclosed_element: 'section.stat' });
   const arrow = payload('x', 'pen', 'freehand', stroke(200, 100, 690, 300, 'section.stat'));
@@ -103,7 +103,7 @@ test('website: arrow between a highlight and a circle is a link; a stroke inside
 });
 
 test('website: an earlier arrow cannot acquire a mark drawn later', async () => {
-  const { websiteRelations } = await import('./src/diagram.js');
+  const { websiteRelations } = await import('../src/diagram.js');
   const arrow = payload('a', 'pen', 'freehand', stroke(210, 210, 700, 500, 'section.stat'));
   const later = payload('m', 'pen', 'circle', ring(200, 200, 50), { enclosed_element: 'button.btn "Download"' });
   assert.deepEqual(websiteRelations([arrow, later]), []);
@@ -111,7 +111,7 @@ test('website: an earlier arrow cannot acquire a mark drawn later', async () => 
 });
 
 test('website: a freehand open C is a mark for an arrow drawn afterward', async () => {
-  const { websiteRelations } = await import('./src/diagram.js');
+  const { websiteRelations } = await import('../src/diagram.js');
   const point=(x,y,selector='h1',text='')=>({x,y,utc:'2026-10-24T12:00:00Z',selector,text,rect:null});
   const loop=makePayload({id:'open-loop',tool:'pen',t:10,
     pts:[[20,20],[100,20],[100,80],[20,80],[20,60]].map(([x,y])=>point(x,y)),elements:['h1']},

@@ -10,7 +10,7 @@
 3. Takes that real transcript together with a sketch bundle and sends it to the
    agent loop (/api/apply), printing the reasoning and the executed HTML.
 
-Run: uv run e2e_voice_test.py   (needs .env with RESON8_API_KEY and LYCEUM_API_KEY,
+Run: uv run test/e2e_voice_test.py   (needs .env with RESON8_API_KEY and LYCEUM_API_KEY,
                                 and `uv run server.py` running)
 """
 import asyncio
@@ -23,8 +23,8 @@ from pathlib import Path
 import edge_tts
 import websockets
 
-HERE = Path(__file__).parent
-for line in (HERE / ".env").read_text().splitlines():
+ROOT = Path(__file__).resolve().parent.parent
+for line in (ROOT / ".env").read_text().splitlines():
     line = line.strip()
     if line and not line.startswith("#") and "=" in line:
         k, v = line.split("=", 1)
@@ -47,7 +47,7 @@ CURRENT_HTML = (
 
 async def voice_to_text() -> list:
     """speech.mp3 -> Reson8 turns -> transcript events"""
-    mp3 = HERE / "speech.mp3"
+    mp3 = ROOT / "speech.mp3"
     if not mp3.exists():
         await edge_tts.Communicate(SAY, "en-US-JennyNeural").save(str(mp3))
         print(f"[1] speech generated: {mp3.name} ({mp3.stat().st_size} bytes)")
@@ -87,7 +87,7 @@ def text_to_agent(transcript: str) -> dict:
     """transcript + sketch bundle -> /api/apply -> reasoning + executed HTML"""
     # one real payload, built by the app's own makePayload, so the backend accepts it
     fixture = subprocess.run(
-        ["node", "stroke_fixture.mjs"], capture_output=True, text=True, cwd=HERE
+        ["node", "test/stroke_fixture.mjs"], capture_output=True, text=True, cwd=ROOT
     )
     stroke = json.loads(fixture.stdout.strip().splitlines()[-1])
     # register the stroke with the backend first, like the app does (receipts)

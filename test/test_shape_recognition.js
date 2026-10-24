@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const recognizer = import('./src/shape-recognition.js');
+const recognizer = import('../src/shape-recognition.js');
 
 // Synthetic strokes inspired by the visible marks, not traced screenshot coordinates.
 function jaggedPolygon(corners, { gap = 0, overshoot = 0, jitter = 1.4, samples = 12 } = {}) {
