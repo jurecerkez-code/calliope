@@ -2,10 +2,6 @@
   <img src="assets/banner.png" alt="CALLIOPE header" width="900">
 </p>
 
-<p align="center">
-  <img src="assets/hero-v2.svg" alt="CALLIOPE: speak + draw on the website, it changes live" width="900">
-</p>
-
 <h1 align="center">calliope</h1>
 
 <p align="center">
