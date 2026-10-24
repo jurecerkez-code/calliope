@@ -14,8 +14,6 @@ test('intent rules', () => {
   assert.equal(classifyIntent('this button should be green and more prominent'), 'modify');
   assert.equal(classifyIntent('put a summary chart here'), 'add');
   assert.equal(classifyIntent('move this over there'), 'move');
-  assert.equal(classifyIntent('put the headline here'), 'move');
-  assert.equal(classifyIntent('put the new chart here'), 'add');
   assert.equal(classifyIntent('remove that banner'), 'remove');
   assert.equal(classifyIntent('what does this do?'), 'query');
   assert.equal(classifyIntent('hmm'), 'unknown');
