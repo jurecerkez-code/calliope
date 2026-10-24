@@ -1,5 +1,5 @@
 // A mark is one settled recognition over one or more immutable stroke payloads.
-export const MARK_SETTLE_DELAY_MS = 2000;
+export const MARK_SETTLE_DELAY_MS = 1000;
 function crossing(a, b) {
   if (a.tool !== 'pen' || b.tool !== 'pen' || a.viewBox !== b.viewBox) return false;
   const ends = s => [s.pts[0], s.pts.at(-1)];
