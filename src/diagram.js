@@ -3,8 +3,8 @@
 // "this is the API gateway" said while (or just after) drawing names the node.
 // Pure functions over plain data; no DOM.
 
-import { buildTimeline, fuse } from "../extension/lib/fusion.js";
-import { classifyShape, makeStroke } from "../extension/lib/strokes.js";
+import { buildTimeline, fuse } from "./lib/fusion.js";
+import { classifyShape, makeStroke } from "./lib/strokes.js";
 import { recognizeShape } from "./shape-recognition.js";
 
 const NEAR = 28; // px around a node that still counts as touching it
@@ -45,9 +45,7 @@ function tipOf(points) {
 	);
 }
 
-// The one rule for "this stroke connects that to that", shared by BLANK CANVAS and
-// WEBSITE mode: the stroke's first point picks the node it starts from, its tip
-// picks the node it goes to. nodes: [{bbox:{x,y,w,h}}]. Either end can be null.
+// Both ends are resolved against marks already present when the arrow is drawn.
 export function connect(nodes, points) {
 	const tip = tipOf(points);
 	return { from: nodeAt(nodes, points[0]), to: nodeAt(nodes, tip), tip };
@@ -162,7 +160,8 @@ export function buildDiagram(strokes, utterances) {
 	for (const r of recs) {
 		if (owner[r.id] || r.kind === "highlight" || diag(r.bbox) <= SMALL)
 			continue;
-		const { from, to } = connect(nodes, r.points);
+		const from = nodeAt(nodes, r.points[0]);
+		const to = nodeAt(nodes, r.tip);
 		if (from && to && from !== to) {
 			const e = {
 				id: `E${edges.length + 1}`,
@@ -206,7 +205,7 @@ export function buildDiagram(strokes, utterances) {
 		owner[r.id] = { type: "annotation", item: a };
 	}
 
-	// Speech: bind pointing words to strokes by time (extension/lib/fusion.js), then
+	// Speech: bind pointing words to strokes by time (src/lib/fusion.js), then
 	// read names from the words that follow.
 	const fused = fuse(
 		utterances.filter((u) => u.final !== false && u.text),
@@ -306,32 +305,26 @@ export function canvasPacketText(packet) {
 	].join("\n");
 }
 
-// ---------- WEBSITE mode: marks on the page and arrows between them ----------
-// A circle/square/triangle, any other closed loop, or a highlight marks a DOM
-// element ("this"). A pen stroke that starts on a mark is an arrow from it:
-//   move  - its tip lands on the page, not on another mark ("put this there")
-//   link  - its tip lands on another mark ("this goes with that")
-//   point - it starts on no mark but its tip lands on one ("look at this")
-// payloads: website stroke payloads from timeline.js makePayload (pts carry the
-// selector and text of the element under each point).
+// Website mode reads settled marks in drawing order. An arrow cannot acquire
+// a source that was circled later, even if both end up in the same APPLY turn.
 const MARK_SHAPES = new Set(["circle", "square", "triangle"]);
 
-export function websiteRelations(payloads) {
+export function websiteRelations(items) {
 	const marks = [];
 	const relations = [];
-	for (const p of payloads) {
-		const points = p.pts.map((q) => ({ x: q.x, y: q.y }));
+	for (const item of items) {
+		const p = item.strokes ? item.strokes[0] : item;
+		if (item.shape === "x") continue;
+		const points = p.pts.map(q => ({ x: q.x, y: q.y }));
 		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
 		const target = (MARK_SHAPES.has(p.shape) && p.enclosed_element) || p.elements?.[0] || "";
 		if (MARK_SHAPES.has(p.shape) || p.tool === "highlighter" || classifyShape(points) === "closed-loop") {
-			marks.push({ id: p.id, bbox, target, shape: p.shape });
+			marks.push({ id: p.id, bbox, target });
 		} else if (p.tool === "pen" && diag(bbox) > SMALL) {
 			const { from, to, tip } = connect(marks, p.pts);
-			if (!from && !to) continue;
-			if (from && to === from) continue; // a stroke inside one mark is not an arrow
-			const kind = from && to ? "link" : from ? "move" : "point";
+			if ((!from && !to) || (from && from === to)) continue;
 			relations.push({
-				kind,
+				kind: from && to ? "link" : from ? "move" : "point",
 				arrow: p.id,
 				from: from ? { stroke: from.id, target: from.target } : null,
 				to: to
@@ -343,7 +336,6 @@ export function websiteRelations(payloads) {
 	return relations;
 }
 
-// One readable line per relation, for the log.
 export function describeRelation(r) {
 	const at = `(${Math.round(r.to.x)}, ${Math.round(r.to.y)})`;
 	if (r.kind === "move") return `ARROW: MOVE ${r.from.target || "MARKED AREA"} → ${at}${r.to.target ? " ON " + r.to.target : ""}`;

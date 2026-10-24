@@ -4,70 +4,113 @@
   import Button from './components/ui/button/Button.svelte';
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
-  import { buildBundles, canApply, withoutMarks } from './timeline.js';
+  import { buildBundles, canApply, lanes, withoutMarks } from './timeline.js';
+  import Lanes from './Lanes.svelte';
+  import { createMarkQueue, MARK_SETTLE_DELAY_MS } from './marks.js';
   import { createAudio } from './audio.js';
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
-  import { simulateWords, MS_PER_WORD } from '../extension/lib/fusion.js';
+  import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
   let feed, prev, eq, boardEl;
-  let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
-  let rows = $state([]), tool = $state('pen'), typed = $state(''), busy = $state(false), micOn = $state(false);
-  let secure = $state(false);
+  let status = $state('CHOOSE HOW TO START.');
+  let rows = $state([]), tool = $state('pen'), typed = $state(''), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
+  let imported = $state(false);
+  let secure = $state(false), publishEnabled = $state(true);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
-  let mode = $state('website'), said = $state(''), nodes = $state([]), edges = $state([]);
+  let mode = $state('start'), said = $state(''), nodes = $state([]), edges = $state([]);
   let board = null, canvasUtts = [], nextUtt = 1, typingStart = null;
   const started = Date.now();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
-  let timeline = [], deliveries = {}, drawing = null, audio = null;
+  let timeline = [], deliveries = {}, drawing = null, audio = null, activeStroke = false;
   const elapsed = () => Date.now()-started;
+  let lanesData = $state({marks:[],words:[],links:[]});
+  function refreshLanes(){lanesData=lanes(timeline);}
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
   function addLine(cls,text){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed())}];scroll();}
   function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
   function scroll(){requestAnimationFrame(()=>{if(feed)feed.scrollTop=feed.scrollHeight;});}
   function rowText(stroke,state){const p=stroke.pts.at(-1);return `${stroke.summary?.text || stroke.tool.toUpperCase()+' '+p.x+', '+p.y+' · '+p.utc} · ${state}`;}
-  function updateRow(stroke,state){rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,state)}:row);scroll();}
-  async function deliver(stroke){
-    if(deliveries[stroke.id]==='sending'||deliveries[stroke.id]==='accepted')return;
-    deliveries[stroke.id]='sending';updateRow(stroke,'SENDING');
+  function updateRow(mark,state,message){rows=rows.map(row=>{
+    if(row.key!==mark.id)return row;
+    const agentMessage=message ?? row.agentMessage;
+    return {...row,agentMessage,text:agentMessage
+      ? `${state} · AGENT SKETCH CONTEXT (FOR APPLY):\n${agentMessage}`
+      : `${mark.shape.toUpperCase()} · ${mark.strokes.length} PATH${mark.strokes.length===1?'':'S'} · ${state}`};
+  });scroll();}
+  async function deliver(mark){
+    if(deliveries[mark.id]==='sending'||deliveries[mark.id]==='accepted')return;
+    deliveries[mark.id]='sending';updateRow(mark,'SENDING');
     try {
-      const response=await fetch('/api/strokes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(stroke.payload)});
+      const response=await fetch('/api/marks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(mark)});
       const ack=await response.json();
-      if(!response.ok||ack.status!=='accepted'||ack.id!==stroke.id)throw new Error(ack.error||'invalid receipt');
-      deliveries[stroke.id]='accepted';updateRow(stroke,'ACCEPTED');
-    }catch(err){deliveries[stroke.id]='failed';updateRow(stroke,'FAILED — CLICK TO RETRY');addLine('err','STROKE NOT DELIVERED: '+err.message);}
+      if(!response.ok||ack.status!=='accepted'||ack.id!==mark.id||typeof ack.agent_message!=='string')throw new Error(ack.error||'invalid receipt');
+      deliveries[mark.id]='accepted';updateRow(mark,'ACCEPTED',ack.agent_message);
+    }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
   }
-  function retry(row){if(row.stroke && deliveries[row.stroke.id]==='failed')deliver(row.stroke);}
+  function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
+  const markQueue=createMarkQueue({onSettled:mark=>{
+    timeline.push({kind:'stroke',t:mark.t,t_end:mark.t_end,payload:mark});
+    refreshLanes();
+    rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
+      .map(row=>row.key===mark.id?{...row,mark}:row);
+    updateRow(mark,'SENDING');
+    const relation=websiteRelations(timeline.filter(e=>e.kind==='stroke').map(e=>e.payload)).find(r=>r.arrow===mark.id);
+    if(relation)addLine('why',describeRelation(relation));
+    return deliver(mark);
+  }});
   function previewHtml(html){
     currentHtml=html;
     // CSP is applied before the untrusted document; no script permission in the iframe sandbox.
-    prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'none'; form-action 'none'">`+html.slice(0,200000);
+    prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https:; img-src data: https:; font-src https:; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri https:">`+html;
   }
   function previewLoaded(){drawing=attachDrawing(prev,{
     tool:()=>tool,elapsed,
-    onStart:stroke=>{rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
-    onMove:stroke=>updateRow(stroke,'DRAWING'),
+    onStart:stroke=>{markQueue.hold();activeStroke=true;rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
+    onMove:stroke=>{rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,'DRAWING')}:row);scroll();},
     onFinish:(stroke,payload,summary)=>{
       stroke.payload=payload;stroke.summary=summary;
-      timeline.push({kind:'stroke',t:stroke.t,t_end:payload.t_end,payload});
-      deliver(stroke);
-      // an arrow from a circled/highlighted element: say where it goes
-      const rel=websiteRelations(timeline.filter(e=>e.kind==='stroke').map(e=>e.payload)).find(r=>r.arrow===payload.id);
-      if(rel) addLine('why',describeRelation(rel));
+      activeStroke=false;
+      rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,`WAITING UP TO ${MARK_SETTLE_DELAY_MS/1000}S FOR NEXT STROKE`)}:row);
+      markQueue.add(payload);
     }
   });}
-  function clearMarks(){drawing?.clear();timeline=withoutMarks(timeline);deliveries={};addLine('fin','MARKS CLEARED');}
+  function clearMarks(){
+    if(busy||activeStroke)return;
+    markQueue.clear();drawing?.clear();timeline=withoutMarks(timeline);deliveries={};refreshLanes();
+    addLine('fin','MARKS CLEARED');
+  }
+  async function importUrl(event){
+    event.preventDefault();
+    if(busy)return;
+    busy=true;importError='';status='IMPORTING WEBSITE...';
+    try{
+      const response=await fetch('/api/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})});
+      const out=await response.json();
+      if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
+      await markQueue.flush();
+      imported=true;mode='website';drawing?.clear();timeline=[];deliveries={};typed='';
+      previewHtml(out.html);
+      addLine('fin','IMPORTED '+out.url);status='WEBSITE IMPORTED. DRAW OR SPEAK ON IT.';
+    }catch(err){importError=err.message;addLine('err','IMPORT FAILED: '+err.message);status='IMPORT FAILED. PREVIEW UNCHANGED.';}
+    finally{busy=false;}
+  }
   async function toggleMic(){
     if(micOn){audio?.stop();micOn=false;return;}
     try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
   }
   async function apply(){
-    const bundles=buildBundles(timeline), strokes=timeline.filter(e=>e.kind==='stroke').map(e=>e.payload);
-    if(!typed && !bundles.length){addLine('err','NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.');return;}
-    if(!canApply(strokes,deliveries)){addLine('err','RETRY FAILED STROKES BEFORE APPLY');return;}
-    status='ANTHROPIC IS REASONING...';busy=true;
+    if(busy)return;
+    if(activeStroke){addLine('err','FINISH DRAWING BEFORE APPLY');return;}
+    busy=true;
     try{
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,relations:websiteRelations(strokes).slice(0,50),current_html:currentHtml})});
+      await markQueue.flush();
+      const bundles=buildBundles(timeline), marks=timeline.filter(e=>e.kind==='stroke').map(e=>e.payload);
+      if(!typed && !bundles.length){addLine('err','NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.');return;}
+      if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
+      status='ANTHROPIC IS REASONING...';
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes:marks}]:bundles,relations:websiteRelations(marks).slice(0,50),current_html:currentHtml})});
       const out=await response.json();
+      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT CONFIRMED SENT'} · FULL AGENT MESSAGE:\n${out.agent_message}`);
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
       previewHtml(out.html);timeline=[];typed='';addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
@@ -149,28 +192,40 @@
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
       audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurn:turn=>{
         if(mode==='canvas') addCanvasUtterance(turn,'reson8');
-        else timeline.push({kind:'transcript',t:elapsed(),text:turn.text});
+        else {timeline.push({kind:'transcript',t:turn.startMs,t_end:turn.endMs,text:turn.text,words:turn.words});refreshLanes();}
       }});
       secure=window.isSecureContext;
+      publishEnabled=config.publishEnabled;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
-    previewHtml(currentHtml);
-    fetch('/jamie-mock.html').then(r=>{if(!r.ok)throw new Error('mock unavailable');return r.text();}).then(previewHtml).catch(()=>{});
-    return ()=>audio?.destroy();
+    const laneTimer=setInterval(refreshLanes,500);
+    return ()=>{clearInterval(laneTimer);audio?.destroy();};
   });
 </script>
 
 <Loader />
 <header>
-  <div class="rec"><span class="dot"></span>REC</div>
-  <div class="brand">CALLIOPE // SPEAK + DRAW {mode==='canvas'?'TO EXPLAIN':'ON THE WEBSITE'}</div>
-  <div class="modes" role="group" aria-label="Canvas">
+  {#if mode!=='start'}<div class="rec"><span class="dot"></span>REC</div>{/if}
+  <div class="brand">CALLIOPE // SPEAK + DRAW {mode==='start'?'':mode==='canvas'?'TO EXPLAIN':'ON THE WEBSITE'}</div>
+  {#if mode!=='start'}<div class="modes" role="group" aria-label="Canvas">
     <Button id="modeWebsite" aria-pressed={mode==='website'} variant={mode==='website'?'amber':'default'} onclick={() => setMode('website')}>WEBSITE</Button>
     <Button id="modeCanvas" aria-pressed={mode==='canvas'} variant={mode==='canvas'?'amber':'default'} onclick={() => setMode('canvas')}>BLANK CANVAS</Button>
-  </div>
+  </div>{/if}
   <div id="status" role="status">{status}</div>
 </header>
-<main>
-  <section class="pane">
+<main class:starting={mode==='start'}>
+  <section class="startup" hidden={mode!=='start'} aria-label="Choose how to start">
+    <div class="startup-heading"><span>NEW SESSION / 01</span><h1>WHAT ARE WE WORKING ON?</h1><p>BRING A PUBLIC WEB PAGE, OR START WITH NOTHING BUT A CANVAS.</p></div>
+    <div class="startup-options">
+      <section class="startup-option"><span class="option-number">01 / WEBSITE</span><h2>START WITH A PAGE</h2><p>PASTE A PUBLIC URL. WE'LL BRING A SAFE PREVIEW INTO THE STUDIO.</p>
+        <form onsubmit={importUrl}><Input id="startUrl" aria-label="Website URL" placeholder="https://example.com" bind:value={url} /><Button type="submit" variant="amber" disabled={busy}>IMPORT WEBSITE ↗</Button></form>
+        {#if importError}<p class="startup-error" role="alert">IMPORT FAILED: {importError}</p>{/if}
+      </section>
+      <section class="startup-option"><span class="option-number">02 / CANVAS</span><h2>START FROM BLANK</h2><p>DRAW AND EXPLAIN A CONCEPT. NO WEBSITE NEEDED.</p>
+        <Button id="startBlank" onclick={() => setMode('canvas')}>START BLANK CANVAS ↗</Button>
+      </section>
+    </div>
+  </section>
+  <section class="pane" hidden={mode==='start'}>
     <h3>TRANSCRIPT + SKETCH LOG // ONE CLOCK</h3>
     <div id="feed" bind:this={feed}>
       {#each rows as row (row.key)}
@@ -181,6 +236,7 @@
         {/if}
       {/each}
     </div>
+    <Lanes data={lanesData} />
     <div id="eqWrap"><div id="eqLabel">VOICE LEVEL</div><canvas id="eq" bind:this={eq}></canvas></div>
     <div class="row">
       <Button id="btnMic" disabled={!secure} variant={micOn?'recording':'default'} onclick={toggleMic}>{secure?(micOn?'MIC OFF':'MIC ON'):'MIC: HTTPS REQUIRED'}</Button>
@@ -203,10 +259,10 @@
       <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
     {:else}
       <div class="row"><Input id="instr" aria-label="Instruction" placeholder="...or type an instruction" bind:value={typed} /></div>
-      <div class="row"><Button id="btnApply" variant="amber" disabled={busy} onclick={apply}>APPLY ▸</Button><Button id="btnPublish" disabled={busy} onclick={publish}>PUBLISH</Button></div>
-      <div class="notice">APPLY = PREVIEW ONLY. PUBLISH STAGES LOCALLY; DEPLOY IS A SEPARATE COMMAND. MIC NEEDS A SECURE ORIGIN AND REACHABLE AUDIO RELAY.</div>
+      <div class="row"><Button id="btnApply" variant="amber" disabled={busy} onclick={apply}>APPLY ▸</Button><Button id="btnPublish" disabled={busy||!publishEnabled} onclick={publish}>{publishEnabled?'PUBLISH':'PUBLISH DISABLED'}</Button></div>
+      <div class="notice">{publishEnabled?'APPLY = PREVIEW ONLY. PUBLISH STAGES LOCALLY; DEPLOY IS A SEPARATE COMMAND.':'REVIEW ONLY — PUBLISH IS DISABLED.'} MIC NEEDS A SECURE ORIGIN AND REACHABLE AUDIO RELAY.</div>
     {/if}
   </section>
   <section class="pane" hidden={mode!=='canvas'}><h3>BLANK CANVAS // DRAW AND EXPLAIN</h3><div id="boardWrap"><svg id="board" bind:this={boardEl} role="img" aria-label="Drawing board"></svg></div></section>
-  <section class="pane" hidden={mode==='canvas'}><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe></div></section>
+  <section class="pane" hidden={mode!=='website'}><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><form class="row" onsubmit={importUrl}><Input id="url" aria-label="Website URL" placeholder="Paste a public website URL" bind:value={url} /><Button type="submit" disabled={busy}>IMPORT URL</Button></form><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe>{#if !imported}<p class="empty-preview">PASTE A PUBLIC URL ABOVE TO BEGIN.</p>{/if}</div></section>
 </main>

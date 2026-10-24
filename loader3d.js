@@ -1,5 +1,6 @@
-// VoiceDraw loading screen: 3 shiny spinning sponsor logos (Reson8, {Tech: Europe}, Anthropic)
-// in glass/chrome tiles. Upgrades the CSS splash to real 3D when WebGL is available.
+// Calliope loading screen: 4 chrome-glass sponsor logos (Jamie, Reson8, {Tech: Europe},
+// Anthropic) rendered from the Blender studio scene (logos.blend), on glass tiles.
+// Upgrades the CSS splash to real 3D when WebGL is available.
 import * as THREE from 'three';
 import { RoomEnvironment } from './vendor/RoomEnvironment.js';
 
@@ -41,6 +42,15 @@ function techeuropeCanvas() {
   x.textBaseline = 'middle';
   x.fillText('{Tech: Europe}', c.width / 2, c.height / 2);
   return c;
+}
+
+// keep the real chrome-glass render as-is (transparent background in the PNG)
+function plainTexture(img) {
+  const tex = new THREE.Texture(img);
+  tex.needsUpdate = true;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
 }
 
 function roundedRect(w, h, r) {
@@ -105,13 +115,16 @@ export function start(canvas, finish) {
   });
 
   Promise.all([
-    loadImage('assets/reson8-logo.png'),
-    loadImage('assets/anthropic-a.svg')
-  ]).then(([reson8Img, anthropicImg]) => {
+    loadImage('assets/render-jamiej.png'),
+    loadImage('assets/render-reson8.png'),
+    loadImage('assets/render-techeurope.png'),
+    loadImage('assets/render-anthropica.png')
+  ]).then(([jamieImg, reson8Img, techeuropeImg, anthropicImg]) => {
     const logos = [
-      { tex: whiteTexture(reson8Img, 1024, 171), w: 1.72, h: 1.72 * 105 / 628 },
-      { tex: whiteTexture(techeuropeCanvas(), 1400, 360), w: 1.72, h: 1.72 * 360 / 1400 },
-      { tex: whiteTexture(anthropicImg, 512, 512), w: 1.15, h: 1.15 }
+      { tex: plainTexture(jamieImg), w: 1.15, h: 1.15 },
+      { tex: plainTexture(reson8Img), w: 1.72, h: 1.72 * 304 / 1024 },
+      { tex: plainTexture(techeuropeImg), w: 1.72, h: 1.72 * 225 / 1400 },
+      { tex: plainTexture(anthropicImg), w: 1.3, h: 1.3 * 827 / 1024 }
     ];
     const groups = [];
     logos.forEach((L, i) => {
@@ -124,7 +137,7 @@ export function start(canvas, finish) {
       );
       face.position.z = 0.185;
       g.add(face);
-      g.position.x = (i - 1) * 2.72;
+      g.position.x = (i - 1.5) * 2.35;
       scene.add(g);
       groups.push(g);
     });

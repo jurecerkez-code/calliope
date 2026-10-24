@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="assets/banner.png" alt="CALLIOPE header" width="900">
+</p>
+
+<p align="center">
   <img src="assets/hero-v2.svg" alt="CALLIOPE: speak + draw on the website, it changes live" width="900">
 </p>
 
@@ -18,7 +22,17 @@
 
 In meetings people talk and sketch at the same time. Text alone loses the sketch. This agent takes both, your words and the marks you draw on the page, tied to the same clock, and rebuilds the website while the conversation keeps going.
 
-Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026. Team: Jure Cerkez, Simon van Laak.
+Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
+
+## Team
+
+| | |
+|---|---|
+| **Jure Cerkez** | M.Sc. Technology & Management, Fall 2025 |
+| Ahmed Sohail | M.Sc. Technology & Management (Apollo11), Fall 2025 |
+| Gonçalo de Deus | M.Sc. Technology & Management, Fall 2025 |
+| Pascal Finn Krebs | M.Sc. Technology & Management, #district13 |
+| Simon van Laak | PM Gen5, Co-Founder @ apparent |
 
 ## What it does
 
@@ -32,7 +46,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026. Team: Jure Cerkez
 
 ## Blank canvas mode
 
-Not every idea starts from a page. Press **BLANK CANVAS** in the header to explain a flow, a draft, or a system design on an empty board while you talk.
+Not every idea starts from a page. Choose **START BLANK CANVAS** on the opening screen to explain a flow, a draft, or a system design on an empty board while you talk. You can switch modes in the header afterward.
 
 - **Shapes become nodes.** Boxes, circles and triangles (and any closed loop) become nodes N1, N2, ....
 - **Lines between shapes become edges.** A stroke that starts at one shape and ends at another becomes an edge E1, E2, ... in the direction you drew it. A small tick at its end is read as the arrowhead.
@@ -48,7 +62,7 @@ flowchart LR
   N1 --> N3
 ```
 
-The canvas code is `src/board.js` (drawing surface and PNG) and `src/diagram.js` (nodes, edges, names, Mermaid). Time matching is shared with the Chrome extension (`extension/lib/fusion.js`).
+The canvas code is `src/board.js` (drawing surface and PNG) and `src/diagram.js` (nodes, edges, names, Mermaid). Time matching lives in `src/lib/fusion.js`.
 
 ## Why this shape
 
@@ -74,7 +88,11 @@ npm run build
 uv run server.py
 ```
 
-Then open **http://127.0.0.1:8800** in Chrome, press **MIC ON**, talk while drawing on the website, press **APPLY**. Without an Anthropic key, drawing works but APPLY reports that the agent is unavailable. The browser sends each completed stroke to the backend; failed deliveries can be retried, and APPLY refuses unaccepted strokes. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
+Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL or **START BLANK CANVAS**; no demo page loads automatically. On a website, press **MIC ON**, talk while drawing, then press **APPLY**. Without an Anthropic key, drawing works but APPLY reports that the agent is unavailable. The browser sends each completed stroke to the backend; failed deliveries can be retried, and APPLY refuses unaccepted strokes. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
+
+To use a website as the studio canvas, paste its public URL on the opening screen and press **IMPORT WEBSITE**. You can import another URL later in website mode. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import keeps you on the opening screen or leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, APPLY, and staged PUBLISH remain the studio's existing controls.
+
+To use another website as the studio canvas, paste its public URL in **Website URL** and press **IMPORT URL**. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, APPLY, and staged PUBLISH remain the studio's existing controls.
 
 > Open the app through the server URL. Opening `index.html` directly does not work: without the server there is no mic relay and no agent.
 
@@ -85,8 +103,7 @@ Then open **http://127.0.0.1:8800** in Chrome, press **MIC ON**, talk while draw
 | `server.py` | HTTP server, Reson8 audio relay, the reasoning and execution loop, staged publish |
 | `src/`, `frontend/`, `vite.config.mjs` | Svelte/Vite studio, Bits UI controls, drawing overlay, shape recognition, timeline, audio lifecycle, loader, blank canvas (`board.js`, `diagram.js`) |
 | `dist/` | Built studio served by Python; generated by `npm run build`, not checked in |
-| `classic.html` | Original single-file app, including the branded loader, kept as a fallback at `/classic.html` |
-| `jamie-mock.html` | A mock of the jamie.ai homepage with their real copy. This is the canvas in the demo |
+| `jamie-mock.html` | A mock of the jamie.ai homepage for optional local demos; it is not loaded on startup |
 | `e2e_voice_test.py` | Proof of the voice to agent path. Generates speech, runs it through Reson8, feeds the real transcript to the agent, prints the reasoning and the executed HTML |
 | `assets/` | The visuals in this README |
 
