@@ -95,15 +95,15 @@ The story of the build, in order, because the path is part of the answer.
 
 7. **Fusion: words to marks.** "This", "that" and "here" bind to the mark nearest in time (6 seconds before, 2.5 seconds after, because people point slightly before speaking). "Move this here" resolves to two marks. Intent rules separate the subtle cases: "put the headline here" is a move, "put the new chart here" is an add.
 
-8. **The agent reasons, then executes.** One Claude call does both jobs and shows its work: a short reasoning paragraph in the UI (including word-versus-mark conflicts), then the complete updated HTML. The prompt carries a structured timeline with intents, sketch geometry, ranked DOM targets and explicit REFERENCE lines the agent is told to trust. Every mark is registered with the backend and gets a receipt before the agent accepts it.
+8. **The agent executes.** One agent call compares the words with the marks and returns complete updated HTML; it does not have to write out its reasoning. The prompt carries a structured timeline with intents, sketch geometry, DOM targets and explicit REFERENCE lines the agent is told to trust. Every mark is registered with the backend and gets a receipt before the agent accepts it.
 
-9. **Prove it by running it.** The repository ships a runnable end-to-end script: generated speech to Reson8 to stroke receipt to Claude reasoning to executed HTML. Running it against the real APIs caught that Reson8's turn_end event is an empty marker and the text lives on turn_end_candidate. Real pipelines find real bugs.
+9. **Prove it by running it.** The repository ships a runnable end-to-end script: generated speech to Reson8 to stroke receipt to agent response to executed HTML. Running it against the real APIs caught that Reson8's turn_end event is an empty marker and the text lives on turn_end_candidate. Real pipelines find real bugs.
 
 10. **One studio, one team.** The web studio moved to Svelte and grew shape recognition (circles, squares, triangles, line direction and angle), multi-stroke marks and an import-any-URL canvas. An early Chrome extension experiment was removed cleanly, with its shared library (deictic fusion, Reson8 message adapter) kept in the studio. Every change shipped as a reviewed pull request.
 
 11. **The loading screen is real 3D.** Four chrome-glass sponsor logos modeled in Blender (Jamie, Reson8, {Tech: Europe}, Anthropic), exported as glTF, spinning on dark glass tiles. A progress bar that slid backwards was fixed by giving it one monotonic source of truth, and the final invisible-logos bug turned out to be a broken relative import in a vendored loader that silently fell back to plain tiles: proven fixed by executing the module graph.
 
-12. **Where it landed.** A live-verified voice-to-agent chain with real API keys, 57+ tests, a documented public repository, and one demo: speak and draw on a website while it changes.
+12. **Where it landed.** A runnable speech-to-agent proof against real APIs, 57+ automated tests, and a documented public repository. The browser's Live voice-to-preview path still needs an end-to-end check before we call that demo verified.
 
 ## Sponsor tech, and why
 
