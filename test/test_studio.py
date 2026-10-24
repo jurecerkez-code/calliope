@@ -63,6 +63,16 @@ class StudioTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def post_stream(self, data):
+        connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port, timeout=5)
+        try:
+            connection.request('POST', '/api/apply', json.dumps({**data, 'stream': True}).encode(),
+                               {'content-type': 'application/json'})
+            response = connection.getresponse()
+            return response.status, response.getheader('content-type'), [json.loads(line) for line in response]
+        finally:
+            connection.close()
+
     def stroke(self):
         coords = [(20, 30), (30, 20), (40, 30), (30, 40), (20, 30)]
         return {
@@ -656,6 +666,83 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(result['html'], original.replace('Old', 'Updated'))
         self.assertEqual(result['reasoning'], '')
         self.assertEqual(len(responses), 2)
+
+    def test_long_optional_explanation_does_not_block_valid_edit(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        tool = json.loads(tool_reply())
+        tool['choices'][0]['message']['content'] = 'x' * 1170
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                json.dumps(tool).encode(), stop_reply('y' * 1170)]
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result['html'], original.replace('Old', 'Updated'))
+        self.assertLessEqual(len(result['reasoning']), 1000)
+        self.assertEqual(opener.return_value.open.call_count, 2)
+
+    def test_stream_emits_first_valid_edit_before_next_provider_round(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        seen = []
+        def reply(request, timeout):
+            seen.append('first provider called' if not seen else 'second provider called')
+            return opener.return_value.open.return_value
+        original_emit = server.Handler._stream_event
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener, \
+             patch.object(server.Handler, '_stream_event', autospec=True) as emit:
+            opener.return_value.open.side_effect = reply
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), stop_reply()]
+            def recorded(handler, kind, **data):
+                seen.append(kind)
+                original_emit(handler, kind, **data)
+            emit.side_effect = recorded
+            code, content_type, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual(content_type, 'application/x-ndjson; charset=utf-8')
+        self.assertEqual([event['type'] for event in events], ['edit', 'done'])
+        self.assertEqual(seen, ['first provider called', 'edit', 'second provider called', 'done'])
+
+    def test_stream_reports_failure_after_partial_edit_for_client_rollback(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), tool_reply(old='missing', new='not found')]
+            code, content_type, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual([event['type'] for event in events], ['edit', 'error'])
+        self.assertEqual(events[0]['html'], original.replace('Old', 'Updated'))
+        self.assertNotIn('html', events[1])
+
+    def test_stream_retries_from_original_after_partial_provider_failure(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), b'{"choices":[]}', tool_reply(), stop_reply()]
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        updated = original.replace('Old', 'Updated')
+        self.assertEqual(code, 200)
+        self.assertEqual([event['type'] for event in events], ['edit', 'edit', 'done'])
+        self.assertEqual([event['html'] for event in events], [updated, updated, updated])
+        self.assertEqual(opener.return_value.open.call_count, 4)
+
+    def test_stream_openrouter_reports_first_edit(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-router'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), stop_reply()]
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual([event['type'] for event in events], ['edit', 'done'])
+        self.assertEqual(events[0]['html'], original.replace('Old', 'Updated'))
+        self.assertEqual(events[1]['html'], events[0]['html'])
+        self.assertEqual(opener.return_value.open.call_args_list[0].args[0].full_url,
+                         'https://openrouter.ai/api/v1/chat/completions')
 
     def test_claude_uses_pi_tool_when_selected(self):
         original = '<html><body><h1>Old</h1></body></html>'

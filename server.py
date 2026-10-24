@@ -515,8 +515,8 @@ def claude_choice(resp):
 
 
 def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
-                on_response=None, provider='lyceum') -> dict:
-    """Apply Pi edits transactionally in memory; only a completed turn returns HTML."""
+                on_response=None, provider='lyceum', on_edit=None) -> dict:
+    """Apply validated Pi edits in memory, optionally reporting each completed batch."""
     validate_document(current_html)
     if prompt is None:
         prompt = build_agent_prompt(bundles, current_html)
@@ -587,14 +587,14 @@ def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
         content = message.get('content')
         if content is None:
             content = ''
-        if not isinstance(content, str) or len(content) > 1000:
-            raise ProviderAnswerError('Invalid or oversized Lyceum explanation')
+        if not isinstance(content, str):
+            raise ProviderAnswerError('Invalid Lyceum explanation')
         calls = message.get('tool_calls')
         if choice.get('finish_reason') == 'stop' and not calls:
             if not edited or working_html == current_html:
                 raise ProviderAnswerError('Lyceum returned no completed edit')
             validate_document(working_html)
-            return {'reasoning': content.strip(), 'html': working_html}
+            return {'reasoning': content.strip()[:1000], 'html': working_html}
         if choice.get('finish_reason') != 'tool_calls' or not isinstance(calls, list) or not calls:
             raise ProviderAnswerError('Lyceum did not finish an edit tool call')
         if len(calls) > 8 or len(json.dumps(calls).encode()) > 32_768:
@@ -613,6 +613,8 @@ def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
             raise LocalAdapterError('Invalid Pi adapter results')
         working_html = result['html']
         edited = True
+        if on_edit:
+            on_edit(working_html)
         if provider == 'claude':
             claude_messages.append({'role': 'assistant', 'content': resp['content']})
             claude_messages.append({'role': 'user', 'content': [
@@ -630,17 +632,17 @@ def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
 
 
 def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None,
-                 on_response=None) -> dict:
-    return agent_apply(bundles, current_html, prompt, on_response, 'lyceum')
+                 on_response=None, on_edit=None) -> dict:
+    return agent_apply(bundles, current_html, prompt, on_response, 'lyceum', on_edit)
 
 
 def claude_apply(bundles: list, current_html: str, prompt: str | None = None,
-                 on_response=None) -> dict:
-    return agent_apply(bundles, current_html, prompt, on_response, 'claude')
+                 on_response=None, on_edit=None) -> dict:
+    return agent_apply(bundles, current_html, prompt, on_response, 'claude', on_edit)
 
 def openrouter_apply(bundles: list, current_html: str, prompt: str | None = None,
-                     on_response=None) -> dict:
-    return agent_apply(bundles, current_html, prompt, on_response, 'openrouter')
+                     on_response=None, on_edit=None) -> dict:
+    return agent_apply(bundles, current_html, prompt, on_response, 'openrouter', on_edit)
 
 
 # ---------- HTTP ----------
@@ -656,6 +658,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('cache-control', 'no-store')
         self.end_headers()
         self.wfile.write(data)
+
+    def _stream_begin(self):
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header('content-type', 'application/x-ndjson; charset=utf-8')
+        self.send_header('cache-control', 'no-store')
+        self.send_header('x-content-type-options', 'nosniff')
+        self.send_header('connection', 'close')
+        self.end_headers()
+        self.wfile.flush()
+
+    def _stream_event(self, kind, **data):
+        self.wfile.write((json.dumps({'type': kind, **data}, ensure_ascii=False) + '\n').encode())
+        self.wfile.flush()
 
     def do_GET(self):
         if self.path == '/api/config':
@@ -798,6 +814,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/apply":
             prompt = None
             agent_attempted = False
+            streaming = payload.get('stream') is True
+            stream_started = False
             session_id = payload.get('session_id') if isinstance(payload, dict) else None
             request_id = payload.get('request_id') if isinstance(payload, dict) else None
             if session_id is not None and (not isinstance(session_id, str) or not TRACE_ID.fullmatch(session_id) or
@@ -829,6 +847,9 @@ class Handler(BaseHTTPRequestHandler):
                 validate_document(html)
                 pi_edit_schema()
                 agent_attempted = True
+                if streaming:
+                    self._stream_begin()
+                    stream_started = True
                 apply_provider = {'claude': claude_apply, 'lyceum': lyceum_apply,
                                   'openrouter': openrouter_apply}[provider]
                 out = None
@@ -836,7 +857,9 @@ class Handler(BaseHTTPRequestHandler):
                     responses = []
                     try:
                         out = apply_provider(bundles, html, prompt=prompt,
-                                             on_response=responses.append)
+                                             on_response=responses.append,
+                                             **({'on_edit': lambda edited_html: self._stream_event('edit', html=edited_html)}
+                                                if streaming else {}))
                     except LocalAdapterError:
                         for response in responses:
                             trace_event(session_id, 'provider_response',
@@ -859,7 +882,10 @@ class Handler(BaseHTTPRequestHandler):
                 trace_event(session_id, 'apply_result', {'request_id': request_id,
                     'status': 'succeeded', 'response': out})
                 out['agent_message'] = prompt
-                self._send(200, out)
+                if streaming:
+                    self._stream_event('done', **out)
+                else:
+                    self._send(200, out)
             except ProviderAnswerError as e:
                 try:
                     trace_event(session_id, 'apply_result', {'request_id': request_id,
@@ -867,7 +893,10 @@ class Handler(BaseHTTPRequestHandler):
                         'error': str(e)[:1000]})
                 except (OSError, ValueError):
                     pass
-                self._send(502, {'error': str(e), 'agent_message': prompt})
+                if stream_started:
+                    self._stream_event('error', error=str(e))
+                else:
+                    self._send(502, {'error': str(e), 'agent_message': prompt})
             except Exception as e:  # surface the error to the UI, never crash the demo
                 try:
                     trace_event(session_id, 'apply_result', {'request_id': request_id,
@@ -875,7 +904,10 @@ class Handler(BaseHTTPRequestHandler):
                         'error': str(e)[:1000]})
                 except (OSError, ValueError):
                     pass
-                self._send(500, {"error": str(e), 'agent_message': prompt})
+                if stream_started:
+                    self._stream_event('error', error=str(e))
+                else:
+                    self._send(500, {"error": str(e), 'agent_message': prompt})
         elif self.path == "/api/publish":
             if os.environ.get('CALLIOPE_REVIEW_MODE') == '1':
                 return self._send(404, {'error': 'not available in review'})
