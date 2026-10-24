@@ -262,8 +262,8 @@ test('a natural pause between X strokes does not send the first one', async () =
     setTimer:(fn,delay)=>{scheduled.push({fn,delay});return scheduled.length;},clearTimer:()=>{}});
   const first=slash('one',[10,10],[110,110],1), second=slash('two',[110,10],[10,110],900);
   queue.add(first);
-  assert.equal(MARK_SETTLE_DELAY_MS,2000);
-  assert.equal(scheduled[0].delay,2000);
+  assert.equal(MARK_SETTLE_DELAY_MS,1000);
+  assert.equal(scheduled[0].delay,1000);
   assert.equal(sent.length,0);
   queue.hold(); // pointerdown of the second stroke cancels the pending settlement
   queue.add(second);
