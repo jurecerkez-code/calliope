@@ -15,7 +15,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/hackathon-Jamie%20Agentic%20AI%20Hack-37ff8b" alt="hackathon">
   <img src="https://img.shields.io/badge/voice-Reson8%20turns-4cc9f0" alt="voice">
-  <img src="https://img.shields.io/badge/brain-Lyceum%20DeepSeek%20V4%20Flash-ffd166" alt="brain">
+  <img src="https://img.shields.io/badge/brain-Anthropic%20Claude-ffd166" alt="brain">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="python">
 </p>
@@ -41,7 +41,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 3. **The agent changes the preview in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It returns updated HTML; no written reasoning is required. Recording mode saves the same voice-and-mark timeline without calling the agent.
 
 <p align="center">
-  <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Lyceum, preview" width="900">
+  <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Claude, preview" width="900">
 </p>
 
 ## Blank canvas mode
@@ -110,7 +110,7 @@ The story of the build, in order, because the path is part of the answer.
 | Part | Technology | Why |
 |---|---|---|
 | Ears | **Reson8** speech to text, turns endpoint (API client: `calliope`) | Server side turn detection with timestamps, fast enough to react mid-meeting. Audio goes 16 kHz mono PCM through a small local relay so the API key never reaches the browser. |
-| Brain | **Claude Haiku via Anthropic**, **DeepSeek V4 Flash via Lyceum**, or **gpt-oss-120b via OpenRouter/Cerebras** | Uses spoken intent, drawing geometry, and target elements to call Pi's exact edit tool; the server returns validated HTML. |
+| Brain | **Claude API (Anthropic)**, Haiku for speed | Uses spoken intent, drawing geometry, and target elements to call Pi's exact edit tool; the server returns validated HTML. |
 
 ## Run it
 
