@@ -77,3 +77,20 @@ test('studio offers a recording/live toggle', () => {
   assert.match(app, /COPY ARTIFACT/);
   assert.match(app, /if\(mode==='live'\)requestApply\(\)/);
 });
+
+test('studio has no text instruction entry; mode events remain separate', async () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /\btyped\b|submitTyped|id="instr"|type a note|type an instruction/);
+  assert.match(app, /modeVersion!==runModeVersion/);
+  assert.match(app, /onStart:stroke=>\{stroke\.mode=mode/);
+  assert.match(app, /kind:'stroke',mode:stroke\.mode/);
+  assert.match(app, /if\(stroke\.mode==='live'&&mode==='live'\)deliver\(stroke\)/);
+  assert.match(app, /row\.stroke\?\.mode==='live'&&row\.stroke\.payload&&!deliveries\[row\.stroke\.id\]/);
+  const { eventsForMode } = await import('./src/modes.js');
+  const live = {kind:'transcript',mode:'live',t:1,text:'change the page'};
+  const recording = {kind:'transcript',mode:'recording',t:2,text:'just record this'};
+  const events = [live, recording];
+  assert.deepEqual(eventsForMode(events,'live'), [live]);
+  assert.deepEqual(eventsForMode(events,'recording'), [recording]);
+  assert.equal(events.length, 2);
+});

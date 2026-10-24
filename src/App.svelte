@@ -2,11 +2,10 @@
   import { onMount } from 'svelte';
   import Loader from './Loader.svelte';
   import Button from './components/ui/button/Button.svelte';
-  import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
   import { buildBundles, canApply } from './timeline.js';
   import { createAudio } from './audio.js';
-  import { MODES, buildArtifact, createLiveQueue } from './modes.js';
+  import { MODES, buildArtifact, createLiveQueue, eventsForMode } from './modes.js';
   let feed, prev, eq;
   const HINTS = {
     recording:'RECORDING: DRAW AND SPEAK. COPY THE ARTIFACT WHEN DONE. THE AGENT IS NOT CALLED.',
@@ -14,12 +13,12 @@
   };
   let mode = $state('live');
   let status = $state(HINTS.live);
-  let rows = $state([]), tool = $state('pen'), typed = $state(''), busy = $state(false), micOn = $state(false);
+  let rows = $state([]), tool = $state('pen'), busy = $state(false), micOn = $state(false);
   let secure = $state(false);
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
-  let timeline = [], deliveries = {}, pending = {}, drawing = null, audio = null;
+  let timeline = [], deliveries = {}, pending = {}, drawing = null, audio = null, modeVersion = 0;
   const elapsed = () => Date.now()-started;
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
   function addLine(cls,text){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed())}];scroll();}
@@ -48,12 +47,13 @@
   }
   function previewLoaded(){drawing=attachDrawing(prev,{
     tool:()=>tool,elapsed,
-    onStart:stroke=>{rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
+    onStart:stroke=>{stroke.mode=mode;rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
     onMove:stroke=>updateRow(stroke,'DRAWING'),
     onFinish:(stroke,payload,summary)=>{
       stroke.payload=payload;stroke.summary=summary;
-      timeline.push({kind:'stroke',t:stroke.t,t_end:payload.t_end,payload});
-      deliver(stroke);
+      timeline.push({kind:'stroke',mode:stroke.mode,t:stroke.t,t_end:payload.t_end,payload});
+      if(stroke.mode==='live'&&mode==='live')deliver(stroke);
+      else updateRow(stroke,stroke.mode==='recording'?'RECORDED':'QUEUED FOR LIVE');
     }
   });}
   function clearMarks(){drawing?.clear();addLine('fin','MARKS CLEARED');}
@@ -63,40 +63,42 @@
   }
   // Sends a snapshot; events that arrive during the agent call stay queued for the next turn.
   async function apply(){
-    const sent=timeline.slice(), text=typed;
+    if(mode!=='live')return;
+    const runModeVersion=modeVersion;
+    const sent=eventsForMode(timeline,'live');
     const bundles=buildBundles(sent), strokes=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
-    if(!text && !bundles.length){if(mode==='live')status='NOTHING NEW FOR THE AGENT.';else addLine('err','NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.');return;}
+    if(!bundles.length){status='NOTHING NEW FOR THE AGENT.';return;}
     await Promise.all(strokes.map(s=>pending[s.id]));
+    if(mode!=='live'||modeVersion!==runModeVersion)return;
     if(!canApply(strokes,deliveries)){addLine('err','RETRY FAILED STROKES BEFORE APPLY');return;}
     status='ANTHROPIC IS REASONING...';busy=true;
     try{
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:text?[{t_start:0,t_end:0,transcript:text,strokes}]:bundles,current_html:currentHtml})});
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,current_html:currentHtml})});
       const out=await response.json();
+      if(mode!=='live'||modeVersion!==runModeVersion)return;
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
-      previewHtml(out.html);timeline=timeline.filter(e=>!sent.includes(e));if(typed===text)typed='';
+      previewHtml(out.html);timeline=timeline.filter(e=>!sent.includes(e));
       addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
-    }catch(err){addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';}
+    }catch(err){if(mode==='live'&&modeVersion===runModeVersion){addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';}}
     finally{busy=false;}
   }
   const requestApply=createLiveQueue(apply);
   function setMode(next){
     if(next===mode)return;
-    mode=next;status=HINTS[next];addLine('st','MODE: '+next.toUpperCase());
+    mode=next;modeVersion++;status=HINTS[next];addLine('st','MODE: '+next.toUpperCase());
+    if(next==='live'){
+      rows.filter(row=>row.stroke?.mode==='live'&&row.stroke.payload&&!deliveries[row.stroke.id]).forEach(row=>deliver(row.stroke));
+      if(eventsForMode(timeline,'live').length)requestApply();
+    }
   }
   function onTurn(text){
-    timeline.push({kind:'transcript',t:elapsed(),text});
+    timeline.push({kind:'transcript',mode,t:elapsed(),text});
     if(mode==='live')requestApply();
   }
-  function submitTyped(){
-    const text=typed.trim();
-    if(!text)return;
-    if(mode==='live'){requestApply();return;}
-    timeline.push({kind:'transcript',t:elapsed(),text});typed='';addLine('fin','NOTE: '+text);
-  }
   async function copyArtifact(){
-    const artifact=buildArtifact(timeline,{page:prev?.contentDocument?.title||'',startedAt});
-    if(!artifact){addLine('err','NOTHING RECORDED YET. SPEAK, DRAW OR TYPE FIRST.');return;}
+    const artifact=buildArtifact(eventsForMode(timeline,'recording'),{page:prev?.contentDocument?.title||'',startedAt});
+    if(!artifact){addLine('err','NOTHING RECORDED YET. SPEAK OR DRAW FIRST.');return;}
     try{
       await navigator.clipboard.writeText(artifact);
       addLine('fin','ARTIFACT COPIED: '+artifact.length+' CHARACTERS. PASTE IT INTO ANY AGENT.');
@@ -159,7 +161,6 @@
       <Button id="btnClear" variant="amber" onclick={clearMarks}>CLEAR MARKS</Button>
       <Button id="btnTool" onclick={() => tool=tool==='pen'?'highlighter':'pen'}>TOOL: {tool.toUpperCase()}</Button>
     </div>
-    <div class="row"><Input id="instr" aria-label="Instruction" placeholder={mode==='live'?'...or type an instruction, enter sends':'...or type a note, enter adds it'} bind:value={typed} onkeydown={e => {if(e.key==='Enter'){e.preventDefault();submitTyped();}}} /></div>
     {#if mode==='live'}
       <div class="row"><Button id="btnApply" variant="amber" disabled={busy} onclick={requestApply}>APPLY ▸</Button><Button id="btnPublish" disabled={busy} onclick={publish}>PUBLISH</Button></div>
       <div class="notice">LIVE: EACH SPOKEN TURN IS SENT WITH THE MARKS DRAWN SINCE THE LAST ONE. MARKS ALONE WAIT FOR SPEECH; APPLY SENDS THEM NOW. CHANGES HIT THE PREVIEW ONLY. PUBLISH STAGES LOCALLY; DEPLOY IS A SEPARATE COMMAND.</div>

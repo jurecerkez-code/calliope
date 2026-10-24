@@ -18,7 +18,7 @@ async function load() {
 		"key-status",
 		reson8ApiKey
 			? "A key is saved."
-			: "No key saved. Typed speech works without one.",
+			: "No key saved. Add a Reson8 key to use voice.",
 	);
 }
 

@@ -1,6 +1,7 @@
 import { buildBundles } from './timeline.js';
 
 export const MODES = ['recording', 'live'];
+export const eventsForMode = (timeline, mode) => timeline.filter(event => event.mode === mode);
 
 const clock = ms => {
   const s = Math.floor(ms / 1000);

@@ -128,9 +128,6 @@
       <button id="btnClear" class="amber">CLEAR MARKS</button>
     </div>
     <div class="row">
-      <input id="instr" placeholder="...or type an instruction">
-    </div>
-    <div class="row">
       <button id="btnApply" class="amber">APPLY &#9656;</button>
       <button id="btnPublish">PUBLISH</button>
     </div>
@@ -353,14 +350,12 @@ function buildBundles(){
 
 /* ---------- apply: Anthropic reasons, then executes. Preview only. ---------- */
 document.getElementById('btnApply').addEventListener('click', async function(){
-  var typed = document.getElementById('instr').value;
   var bs = buildBundles();
-  var allStrokes = timeline.filter(function(e){ return e.kind === 'stroke'; });
-  if(!typed && !bs.length){ addLine('err', 'NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.'); return; }
+  if(!bs.length){ addLine('err', 'NOTHING TO APPLY. SPEAK OR DRAW FIRST.'); return; }
   status.innerHTML = 'ANTHROPIC IS REASONING...'; this.disabled = true;
   try{
     var payload = {
-      bundles: typed ? [{t_start:0, t_end:0, transcript: typed, strokes: allStrokes}] : bs,
+      bundles: bs,
       current_html: currentHtml
     };
     var r = await fetch('/api/apply', {
@@ -373,7 +368,6 @@ document.getElementById('btnApply').addEventListener('click', async function(){
     currentHtml = out.html;
     loadPreview();
     timeline = [];
-    document.getElementById('instr').value = '';
     addLine('fin', 'EXECUTED ON PREVIEW. NOTHING PUBLISHED.');
     status.innerHTML = '<span class="hot">PREVIEW UPDATED. KEEP TALKING.</span>';
   }catch(err){

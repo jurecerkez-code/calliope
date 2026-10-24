@@ -6,9 +6,7 @@ import {
 	buildPacket,
 	DEICTICS,
 	fuse,
-	MS_PER_WORD,
 	packetText,
-	simulateWords,
 } from "../lib/fusion.js";
 import { adaptMessage, Reson8Client, SAMPLE_RATE } from "../lib/reson8.js";
 import { strokeColor } from "../lib/strokes.js";
@@ -412,11 +410,11 @@ async function startVoice() {
 	clearBanner("voice");
 	try {
 		if (!navigator.onLine)
-			throw new VoiceError("You are offline. Typed speech still works.");
+			throw new VoiceError("You are offline. Live voice needs a network connection.");
 		const tok = await chrome.runtime.sendMessage({ type: "dnt:token" });
 		if (tok?.error === "missing_key") {
 			throw new VoiceError(
-				"Add your Reson8 API key to use live voice. Typed speech works without it.",
+				"Add your Reson8 API key to use live voice.",
 				[
 					{
 						label: "Open options",
@@ -552,43 +550,6 @@ function onTranscript(raw) {
 
 function setVoiceState(text) {
 	$("voice-state").textContent = text;
-}
-
-// ---------- simulated speech ----------
-let typingStartMs = null;
-$("say-text").addEventListener("input", (e) => {
-	if (e.target.value.trim() && typingStartMs == null) typingStartMs = now();
-	if (!e.target.value.trim()) typingStartMs = null;
-});
-$("say-text").addEventListener("keydown", (e) => {
-	if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-		e.preventDefault();
-		say();
-	}
-});
-
-function say() {
-	const text = $("say-text").value.trim();
-	if (!text) return;
-	const endMs = now();
-	// The typed words count as spoken over the time spent typing, ending now. Without a
-	// typing interval (pasted text), assume a normal speaking rate.
-	const words = text.split(/\s+/).length;
-	const startMs =
-		typingStartMs != null && typingStartMs < endMs
-			? typingStartMs
-			: Math.max(0, endMs - words * MS_PER_WORD);
-	addUtterance({
-		text,
-		final: true,
-		startMs,
-		endMs,
-		words: simulateWords(text, startMs, endMs),
-		source: "simulated",
-	});
-	$("say-text").value = "";
-	typingStartMs = null;
-	render();
 }
 
 function addUtterance(u) {
@@ -1049,7 +1010,6 @@ $("btn-undo").addEventListener(
 		send(session.tabId, { type: "dnt:undo" }).catch(() => {}),
 );
 $("btn-voice").addEventListener("click", toggleVoice);
-$("btn-say").addEventListener("click", say);
 $("btn-copy").addEventListener("click", copyPacket);
 $("btn-copy-png").addEventListener("click", copySnapshot);
 $("btn-download-png").addEventListener("click", downloadSnapshot);
@@ -1065,7 +1025,7 @@ addEventListener("offline", () =>
 	showBanner(
 		"net",
 		"warn",
-		"You are offline. Live voice will not work; typed speech still does.",
+		"You are offline. Live voice needs a network connection.",
 	),
 );
 addEventListener("online", () => clearBanner("net"));
@@ -1077,7 +1037,7 @@ async function checkKey() {
 		showBanner(
 			"key",
 			"info",
-			"No Reson8 API key yet. Live voice needs one; typed speech works without it.",
+			"No Reson8 API key yet. Live voice needs one.",
 			[{ label: "Add key", run: () => chrome.runtime.openOptionsPage() }],
 		);
 	} else {
@@ -1105,7 +1065,7 @@ setInterval(() => {
 		showBanner(
 			"net",
 			"warn",
-			"You are offline. Live voice will not work; typed speech still does.",
+			"You are offline. Live voice needs a network connection.",
 		);
 	const tab = await activeTab();
 	if (tab)

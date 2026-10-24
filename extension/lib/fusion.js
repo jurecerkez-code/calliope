@@ -281,19 +281,3 @@ export function packetText(packet) {
 		"Paste the PNG snapshot alongside this. Its numbered badges (S1, S2, ...) match strokes[].id.",
 	].join("\n");
 }
-
-// Simulated speech: spreads typed words evenly over [startMs, endMs] so they look like
-// a Reson8 transcript with word timestamps.
-export function simulateWords(text, startMs, endMs) {
-	const tokens = text.trim().split(/\s+/).filter(Boolean);
-	if (!tokens.length) return [];
-	const span = Math.max(1, endMs - startMs) / tokens.length;
-	return tokens.map((t, i) => ({
-		text: t,
-		startMs: Math.round(startMs + i * span),
-		endMs: Math.round(startMs + i * span + span * 0.9),
-	}));
-}
-
-// Typical speaking rate, used when there is no typing interval to go on.
-export const MS_PER_WORD = 380;

@@ -34,7 +34,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026. Team: Jure Cerkez
 
 A toggle in the header switches between them at any time:
 
-- **RECORDING** tracks your marks and your voice on one clock and does not call the agent. **COPY ARTIFACT** puts a Markdown summary plus JSON (transcript chunks, shapes, bounds, DOM targets, raw SVG paths) on the clipboard, ready to paste into any agent. Typed text is added as a note.
+- **RECORDING** tracks your marks and your voice on one clock and does not call the agent. **COPY ARTIFACT** puts a Markdown summary plus JSON (transcript chunks, shapes, bounds, DOM targets, raw SVG paths) on the clipboard, ready to paste into any agent.
 - **LIVE** sends each committed spoken turn, with the marks drawn since the last one, straight to the agent, which rewrites the preview. One call runs at a time; turns spoken during a call go out right after it. Marks alone wait for speech, and **APPLY** sends them immediately.
 
 ## Why this shape

@@ -4,7 +4,7 @@
 
 Draw and Talk is the Chrome extension version of calliope. It lives in this `extension/` folder. You draw freehand on any web page while you speak. It records timestamped strokes and speech, works out which DOM elements each stroke points at, binds spoken words like "this" and "here" to the nearest stroke in time, and builds a context packet (JSON plus a PNG snapshot). You paste the packet into a coding agent so it can make the change.
 
-Speech comes from [Reson8](https://reson8.dev) realtime speech-to-text with word-level timestamps. A typed "simulated speech" input works with no key and no network.
+Speech comes from [Reson8](https://reson8.dev) realtime speech-to-text with word-level timestamps. A Reson8 key and network connection are needed for voice capture.
 
 ---
 
@@ -19,12 +19,12 @@ Requirements: Chrome 116 or later (desktop).
 
 There are no dependencies and nothing to compile. `package.json` exists only so `npm test` can run the unit tests.
 
-### Try it without a key
+### Try it
 
-1. Open any normal web page (or the demo page below).
+1. Open any normal web page (or the demo page below) and set up voice as described below.
 2. Click the **Draw and Talk** toolbar button. The side panel opens and the page gets a drawing overlay.
 3. Press **Start drawing** (or `Alt+Shift+D`) and circle something.
-4. In the panel, type `this button should be green` and press **Enter** (Say).
+4. Press **Start voice** and say "this button should be green".
 5. The Results list shows the utterance with intent `modify`, the reference `"this" -> S1`, and the target element with its selector. The timeline shows the stroke, the words, and the link between them.
 6. Press **Copy packet** and paste it anywhere. Press **Copy PNG** (or **Download PNG**) for the snapshot.
 
@@ -88,7 +88,6 @@ The microphone is requested by the browser's normal permission prompt, not by a 
 | `Alt+Shift+C` | Copy the packet |
 | `Esc` | Stop drawing (while drawing on the page) |
 | `Cmd/Ctrl+Z` | Undo the last stroke (while drawing) |
-| `Enter` | Say (in the typed-speech box; `Shift+Enter` adds a new line) |
 
 Change shortcuts at `chrome://extensions/shortcuts`.
 
@@ -96,7 +95,7 @@ Change shortcuts at `chrome://extensions/shortcuts`.
 
 ## The packet
 
-**Copy packet** produces a header line, the JSON in a fenced block, and a note to paste the PNG alongside. Shortened example from the demo page:
+**Copy packet** produces a header line, the JSON in a fenced block, and a note to paste the PNG alongside. Example of the packet shape:
 
 ```json
 {
@@ -119,7 +118,7 @@ Change shortcuts at `chrome://extensions/shortcuts`.
   }],
   "utterances": [{
     "id": "U1", "startMs": 1873, "endMs": 3194, "text": "this button should be green and more prominent",
-    "final": true, "source": "simulated", "intent": "modify",
+    "final": true, "source": "reson8", "intent": "modify",
     "references": [{ "word": "this", "atMs": 1948, "strokeId": "S1", "confidence": 0.96 }],
     "target": { "selector": "#export-report", "label": "Export report", "tag": "button", "confidence": 0.55, "strokeId": "S1", "anchor": { "x": 99, "y": 444 } },
     "instruction": "Modify button \"Export report\" (#export-report): \"this button should be green and more prominent\""
@@ -142,13 +141,13 @@ content/
   overlay.css
 sidepanel/
   panel.html/.css
-  panel.js           session clock, mic + Reson8 socket, simulated speech, timeline, results, export
+  panel.js           session clock, mic + Reson8 socket, timeline, results, export
   pcm-worklet.js     float -> 16-bit PCM in 100 ms chunks
 lib/
   strokes.js         Ramer-Douglas-Peucker simplification, bbox, shape classifier, shared stroke painter
   targets.js         elementsFromPoint scoring, selectorFor, labelFor
   reson8.js          WebSocket client, message adapter, close-code messages
-  fusion.js          deictic binding, intent, packet builder, simulated word timing
+  fusion.js          deictic binding, intent, packet builder
   export.js          PNG rendering, clipboard, download
 options/             API key, language, one-time microphone grant
 demo/dashboard.html  page to draw on
@@ -162,8 +161,6 @@ tests/               node:test unit tests for strokes, fusion, and the Reson8 ad
 **Targets.** Only on stroke end, never during a move: up to 40 points along the stroke (plus an interior grid for loops, a band just above underlines, and extra weight on a line's end point) go through `document.elementsFromPoint`. Each element is scored on coverage (how many samples hit it, discounted by stacking depth) and box fit (overlap between the stroke's box and the element's box, with shape-specific rules). Page-sized wrappers are penalised. The top three are kept, each with a stable selector (non-generated id, test attributes, or a short class/`nth-of-type` path checked for uniqueness) and a readable label (aria-label, alt, title, placeholder, or text).
 
 **Fusion.** Each deictic word (`this`, `that`, `these`, `those`, `here`, `there`) binds to the stroke nearest in time, within 6 s before the word or 2.5 s after it (people tend to point just before they say "this"). A second deictic in the same utterance prefers a different stroke, so "move this here" can use two strokes. An utterance with no deictic falls back to the stroke closest to it in time, with lower confidence. Intent comes from keyword rules: `query`, `remove`, `move`, `add`, `modify`, `unknown`. The utterance target is the bound stroke's best element: the place word for `add`, the object word otherwise.
-
-**Simulated speech.** Typed words are spread evenly from your first keystroke to the moment you press Say, as if spoken while you typed. Pasted text with no typing interval gets about 380 ms per word, ending at Say. Typing a sentence takes much longer than saying it, so stamping only the final second or two would push "this" outside the binding window.
 
 **Base modes.** *Live page* (default) draws over the real DOM. *Screenshot* captures the visible area with `chrome.tabs.captureVisibleTab` (the overlay is hidden for the capture) and shows it as a still image under the strokes, pinned to the scroll position at capture time. Strokes are still matched to the live DOM underneath. Every switch is logged in `session.baseChanges`.
 
@@ -194,12 +191,7 @@ npm test
 
 This runs Node's built-in test runner (Node 18+) over `tests/`: stroke simplification and shape classes, deictic binding, intent rules, packet validity and time ordering, and the Reson8 message adapter.
 
-The full flow was also checked in Chrome for Testing with the unpacked extension loaded. A script drew real pointer strokes on the demo page, typed simulated speech in the panel, and checked the results:
-
-- A circle around "Export report" resolved to `#export-report`. An arrow ending in the empty slot resolved to `#slot`.
-- "this" bound to S1 and "here" bound to S2, with intents `modify` and `add`.
-- Copy, the Screenshot base, and the PNG export all worked.
-- The restricted-page message appeared on `chrome://version`.
+The voice-only panel still needs an end-to-end check with a real microphone and Reson8 stream.
 
 ---
 
@@ -212,4 +204,4 @@ The full flow was also checked in Chrome for Testing with the unpacked extension
 5. Press **Copy packet**, paste it into a coding agent, then press **Copy PNG** and paste the image too. Show the change the agent proposes.
 6. Close: the drawing says where, the voice says why, and the timestamps tie them together.
 
-No key or bad Wi-Fi on stage? Type the two sentences into the typed-speech box instead. Fusion works the same way.
+Voice capture needs a Reson8 key and a working network connection.
