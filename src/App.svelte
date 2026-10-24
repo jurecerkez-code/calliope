@@ -6,7 +6,7 @@
   import Timeline from './components/Timeline.svelte';
   import Icon from './components/brand/Icon.svelte';
   import { attachDrawing } from './drawing.js';
-  import { buildBundles, canApply } from './timeline.js';
+  import { buildBundles, canApply, withoutMarks } from './timeline.js';
   import { createAudio } from './audio.js';
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
@@ -90,9 +90,8 @@
       if(rel) addLine('why',describeRelation(rel));
     }
   });}
-  // Clear starts a fresh session: marks, words and the clock. The clock only resets while the mic
-  // is off, because Reson8 word times are mapped onto it.
-  function clearMarks(){drawing?.clear();marks=[];note='';timeline=[];turns=turns.filter(t=>t.mode!=='website');interpretationHistory=[];stream=[];if(!micOn)started=Date.now();now=elapsed();}
+  // Keep speech on its original clock, but discard every active mark and its delivery receipt.
+  function clearMarks(){drawing?.clear();marks=[];note='';timeline=withoutMarks(timeline);deliveries={};}
   async function toggleMic(){
     if(micOn){audio?.stop();micOn=false;interim='';audioState='idle';return;}
     try{await audio.start();micOn=true;audioState='connecting';}catch(err){audioState='error';addLine('err','Mic failed: '+err.message);}
@@ -104,7 +103,7 @@
     if(!canApply(strokes,deliveries)){addLine('err','Retry failed strokes before apply.');return;}
     status='Reading your marks and your words…';busy=true;
     try{
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations:websiteRelations(strokes),current_html:currentHtml})});
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations:websiteRelations(strokes).slice(0,50),current_html:currentHtml})});
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       push({kind:'agent',text:out.reasoning||'Done.'});

@@ -89,6 +89,76 @@ def _clip(v, n=200) -> str:
     return re.sub(r"[\x00-\x1f]", " ", str(v if v is not None else ""))[:n]
 
 
+def valid_relations(relations, strokes) -> bool:
+    """An arrow instruction must refer to strokes supplied in this accepted turn."""
+    def touches(mark, point):
+        b = mark['bbox']
+        return b['x'] - 28 <= point['x'] <= b['x'] + b['width'] + 28 and b['y'] - 28 <= point['y'] <= b['y'] + b['height'] + 28
+
+    if not isinstance(relations, list) or len(relations) > 50:
+        return False
+    by_id = {s['id']: (i, s) for i, s in enumerate(strokes)}
+    seen = set()
+    for r in relations:
+        if not isinstance(r, dict) or r.get('kind') not in ('move', 'link', 'point'):
+            return False
+        arrow_id = r.get('arrow')
+        if not isinstance(arrow_id, str) or arrow_id in seen or arrow_id not in by_id:
+            return False
+        seen.add(arrow_id)
+        arrow_index, arrow = by_id[arrow_id]
+        if arrow.get('tool') != 'pen' or not arrow.get('pts'):
+            return False
+        start = arrow['pts'][0]
+        tip = max(arrow['pts'], key=lambda p: (p['x'] - start['x']) ** 2 + (p['y'] - start['y']) ** 2)
+        src, dst = r.get('from'), r.get('to')
+        if not isinstance(dst, dict):
+            return False
+        try:
+            if any(isinstance(dst.get(k), bool) or not isinstance(dst.get(k), (int, float))
+                   or not math.isfinite(dst[k]) for k in ('x', 'y')):
+                return False
+        except OverflowError:
+            return False
+        if dst['x'] != tip['x'] or dst['y'] != tip['y']:
+            return False
+        if r['kind'] == 'point':
+            if src is not None:
+                return False
+        elif not isinstance(src, dict):
+            return False
+        earlier_marks = [s for s in strokes[:arrow_index]
+                         if s.get('tool') == 'highlighter' or s.get('shape') in ('circle', 'square', 'triangle')]
+        if r['kind'] == 'point' and any(touches(mark, start) for mark in earlier_marks):
+            return False
+        if r['kind'] == 'move' and any(touches(mark, tip) for mark in earlier_marks):
+            return False
+        for end in (src, dst):
+            if end is None:
+                continue
+            mark_id = end.get('stroke')
+            if mark_id is None:
+                if end is not dst or r['kind'] != 'move' or end.get('target', '') != tip.get('selector', ''):
+                    return False
+                text = ' '.join((tip.get('text') or '').split())[:80]
+                if end.get('text') != text:
+                    return False
+                continue
+            if not isinstance(mark_id, str) or mark_id not in by_id or by_id[mark_id][0] >= arrow_index:
+                return False
+            mark = by_id[mark_id][1]
+            if not touches(mark, start if end is src else tip):
+                return False
+            target = (mark.get('enclosed_element') if mark.get('shape') in ('circle', 'square', 'triangle') else None) or (mark.get('elements') or [''])[0]
+            if end.get('target') != target:
+                return False
+        if (r['kind'] == 'move') != (dst.get('stroke') is None):
+            return False
+        if r['kind'] == 'link' and isinstance(src, dict) and src.get('stroke') == dst.get('stroke'):
+            return False
+    return True
+
+
 def relation_lines(relations) -> list:
     """One prompt line per arrow from src/diagram.js websiteRelations().
     kind: move (mark -> spot on the page), link (mark -> mark), point (-> mark).
@@ -100,8 +170,11 @@ def relation_lines(relations) -> list:
         src = r.get("from") if isinstance(r.get("from"), dict) else {}
         dst = r.get("to") if isinstance(r.get("to"), dict) else {}
         try:
-            at = f"({round(float(dst.get('x', 0)))}, {round(float(dst.get('y', 0)))})"
-        except (TypeError, ValueError):
+            x, y = float(dst['x']), float(dst['y'])
+            if not math.isfinite(x) or not math.isfinite(y):
+                continue
+            at = f"({round(x)}, {round(y)})"
+        except (KeyError, TypeError, ValueError, OverflowError):
             continue
         what = _clip(src.get("target")) or "the marked area"
         if r["kind"] == "move":
@@ -299,6 +372,8 @@ class Handler(BaseHTTPRequestHandler):
                 with STROKES_LOCK:
                     if any(STROKES.get(s.get('id')) != s for s in strokes):
                         return self._send(409, {'error': 'stroke not accepted by backend; retry delivery'})
+                if not valid_relations(payload.get('relations', []), strokes):
+                    return self._send(400, {'error': 'invalid arrow relation for accepted strokes'})
                 out = claude_apply(payload.get("bundles", []), payload.get("current_html", ""), payload.get("relations", []))
                 self._send(200, out)
             except Exception as e:  # surface the error to the UI, never crash the demo

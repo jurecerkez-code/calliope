@@ -24,6 +24,10 @@ export function canApply(strokes, deliveries) {
   return strokes.every(stroke => deliveries[stroke.id] === 'accepted');
 }
 
+export function withoutMarks(timeline) {
+  return timeline.filter(event => event.kind !== 'stroke');
+}
+
 export function buildBundles(timeline) {
   const events = timeline.slice().sort((a,b) => a.t - b.t);
   const out = []; let chunk = null;

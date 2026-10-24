@@ -100,3 +100,11 @@ test('website: arrow between two circles is a link; a stroke inside one mark is 
   assert.equal(rels.length, 1);
   assert.deepEqual([rels[0].kind, rels[0].from.target, rels[0].to.target], ['link', 'h1', 'section.stat']);
 });
+
+test('website: an earlier arrow cannot acquire a mark drawn later', async () => {
+  const { websiteRelations } = await import('./src/diagram.js');
+  const arrow = payload('a', 'pen', 'freehand', stroke(210, 210, 700, 500, 'section.stat'));
+  const later = payload('m', 'pen', 'circle', ring(200, 200, 50), { enclosed_element: 'button.btn "Download"' });
+  assert.deepEqual(websiteRelations([arrow, later]), []);
+  assert.equal(websiteRelations([later, arrow])[0].kind, 'move');
+});

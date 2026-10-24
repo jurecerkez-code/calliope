@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBundles, makePayload, canApply } from './src/timeline.js';
+import { buildBundles, makePayload, canApply, withoutMarks } from './src/timeline.js';
+import { websiteRelations } from './src/diagram.js';
 import { describeSketch } from './src/shape.js';
 import { readFileSync } from 'node:fs';
 
@@ -56,4 +57,20 @@ test('interpretation renders every resolved turn and retains applied turns', () 
 
 test('highlighter cannot be sent as a pen stroke', () => {
   assert.throws(() => makePayload({id:'old-tool',tool:'highlighter',t:1,pts,elements:[]}, 4, {width:949,height:2862}, ''), /pen/i);
+});
+
+test('clearing website marks removes strokes and their inferred moves, but keeps speech', () => {
+  const circle = Array.from({length:25}, (_, i) => {
+    const a = i * Math.PI * 2 / 24;
+    return {...pts[0], x:Math.round(30+15*Math.cos(a)), y:Math.round(30+15*Math.sin(a))};
+  });
+  const mark = makePayload({id:'mark', tool:'pen', t:1, pts:circle, elements:['button#download']}, 4, {width:949,height:2862}, 'button#download');
+  const arrowPts = [{...pts[0], x:45, y:30}, { ...pts[1], x:200, y:100 }, { ...pts[2], x:400, y:120 }];
+  const arrow = makePayload({id:'arrow', tool:'pen', t:5, pts:arrowPts, elements:['button#download']}, 8, {width:949,height:2862}, '');
+  const timeline = [{kind:'transcript', t:0, text:'move this'}, {kind:'stroke', t:1, payload:mark}, {kind:'stroke', t:5, payload:arrow}];
+  assert.equal(websiteRelations([mark, arrow]).length, 1);
+  const cleared = withoutMarks(timeline);
+  assert.deepEqual(cleared, [timeline[0]]);
+  assert.deepEqual(buildBundles(cleared)[0].strokes, []);
+  assert.deepEqual(websiteRelations(cleared.filter(e => e.kind === 'stroke').map(e => e.payload)), []);
 });
