@@ -16,6 +16,7 @@ import urllib.request
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import websockets
 
@@ -39,10 +40,12 @@ MODEL = os.environ.get("MODEL", "claude-sonnet-4-5")  # confirm exact id in the 
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
-    "&include_timestamps=true&eager_turn_probability=0.5&final_turn_probability=0.92"
+    "&include_timestamps=true&include_words=true&eager_turn_probability=0.5&final_turn_probability=0.92"
 )
 HTTP_PORT = int(os.environ.get('HTTP_PORT', '8800'))
 AUDIO_PORT = int(os.environ.get('AUDIO_PORT', '8801'))
+# Set this to the exact HTTPS origin only when the loopback server sits behind a trusted proxy.
+STUDIO_ORIGIN = os.environ.get('STUDIO_ORIGIN', '')
 STROKES = {}
 STROKES_LOCK = threading.Lock()
 MARKS = {}
@@ -117,7 +120,7 @@ def agent_sketch_message(item: dict) -> str:
     center = item.get('enclosed_element', first.get('enclosed_element', ''))
     target = f"around {center}" if shape in ('circle', 'square', 'triangle') and center else f"over {touched}"
     viewport = first['viewport']
-    description = (f"[{item.get('t', 0)}-{item.get('t_end', 0)}ms] "
+    description = (f"[{item.get('t', 0)}-{item.get('t_end', 0)}ms] SKETCH {item['id']}: "
                    f"{name} drawn at {points[0]['utc']}, coordinates {bounds} "
                    f"in {first['coordinate_space']} (page {viewport['width']}×{viewport['height']}), "
                    f"{target}; touched {touched}. "
@@ -136,13 +139,19 @@ def build_agent_prompt(bundles: list, current_html: str) -> str:
     """Build the complete text of the user message submitted to the agent."""
     timeline_desc = []
     for b in bundles:
-        timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}")
+        intent = f" (intent: {b['intent']})" if b.get("intent") else ""
+        timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}{intent}")
         for s in b.get("strokes", []):
             timeline_desc.append(agent_sketch_message(s))
+        for r in b.get("references", []):
+            word = f'"{r.get("word", "")}"' if r.get("word") else "(no pointing word)"
+            timeline_desc.append(f"[{r.get('atMs', 0)}ms] REFERENCE {word} -> {r.get('strokeId') or 'no sketch'}")
     prompt = (
         "You are a web design agent in a live meeting. The user SPEAKS while DRAWING on top "
         "of a website. Each transcript chunk carries the sketches drawn in the SAME PERIOD. "
         "Each sketch is summarized as a tentative shape, UTC timestamp, page coordinates and DOM target. "
+        "REFERENCE lines bind spoken pointing words (this/that/here) to the sketch they refer to; "
+        "trust a REFERENCE over your own guess of which mark matters. "
         "A shape is not a command. Infer the requested change from the spoken words too.\n\n"
         "REASON FIRST: one short paragraph. What does the user want changed, combining words "
         "and sketches? Note conflicts between words and marks explicitly.\n"
@@ -254,6 +263,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        host = self.headers.get('Host', '')
+        try:
+            parsed_host = urlsplit('http://' + host)
+            loopback = parsed_host.hostname in ('127.0.0.1', 'localhost', '::1') and parsed_host.port is not None
+            local_origin = 'http://' + host if loopback else None
+        except ValueError:
+            local_origin = None
+        allowed_origin = STUDIO_ORIGIN if STUDIO_ORIGIN and host == urlsplit(STUDIO_ORIGIN).netloc else local_origin
+        if not allowed_origin or (self.headers.get('Origin') and self.headers['Origin'] != allowed_origin):
+            return self._send(403, {'error': 'origin not allowed'})
+        if self.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+            return self._send(415, {'error': 'application/json required'})
         try:
             n = int(self.headers.get('content-length', 0))
         except ValueError:

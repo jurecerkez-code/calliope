@@ -4,7 +4,8 @@
   import Button from './components/ui/button/Button.svelte';
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
-  import { buildBundles, canApply } from './timeline.js';
+  import { buildBundles, canApply, lanes } from './timeline.js';
+  import Lanes from './Lanes.svelte';
   import { createMarkQueue, MARK_SETTLE_DELAY_MS } from './marks.js';
   import { createAudio } from './audio.js';
   let feed, prev, eq;
@@ -15,6 +16,8 @@
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
   let timeline = [], deliveries = {}, drawing = null, audio = null, activeStroke = false;
   const elapsed = () => Date.now()-started;
+  let lanesData = $state({marks:[],words:[],links:[]});
+  function refreshLanes(){lanesData=lanes(timeline);}
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
   function addLine(cls,text){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed())}];scroll();}
   function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
@@ -40,6 +43,7 @@
   function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
   const markQueue=createMarkQueue({onSettled:mark=>{
     timeline.push({kind:'stroke',t:mark.t,t_end:mark.t_end,payload:mark});
+    refreshLanes();
     rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
       .map(row=>row.key===mark.id?{...row,mark}:row);
     updateRow(mark,'SENDING');
@@ -99,13 +103,14 @@
   }
   onMount(()=>{
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
-      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,onTurn:text=>timeline.push({kind:'transcript',t:elapsed(),text})});
+      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurn:utt=>{timeline.push({kind:'transcript',t:utt.startMs,t_end:utt.endMs,text:utt.text,words:utt.words});refreshLanes();}});
       secure=window.isSecureContext;
       publishEnabled=config.publishEnabled;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
     previewHtml(currentHtml);
     fetch('/jamie-mock.html').then(r=>{if(!r.ok)throw new Error('mock unavailable');return r.text();}).then(previewHtml).catch(()=>{});
-    return ()=>audio?.destroy();
+    const laneTimer=setInterval(refreshLanes,500);
+    return ()=>{clearInterval(laneTimer);audio?.destroy();};
   });
 </script>
 
@@ -127,6 +132,7 @@
         {/if}
       {/each}
     </div>
+    <Lanes data={lanesData} />
     <div id="eqWrap"><div id="eqLabel">VOICE LEVEL</div><canvas id="eq" bind:this={eq}></canvas></div>
     <div class="row">
       <Button id="btnMic" disabled={!secure} variant={micOn?'recording':'default'} onclick={toggleMic}>{secure?(micOn?'MIC OFF':'MIC ON'):'MIC: HTTPS REQUIRED'}</Button>
