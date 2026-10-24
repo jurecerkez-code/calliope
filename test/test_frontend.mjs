@@ -196,7 +196,7 @@ test('Calliope retains its brand and preview controls without a publish action',
   assert.match(app, /id="btnApply"/);
   assert.doesNotMatch(app, /id="btnPublish"|\/api\/publish|async function publish\(/);
   assert.match(app, /LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY/);
-  assert.match(app, /REVIEW ONLY/);
+  assert.match(app, /REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED/);
   assert.match(app, /ack\.agent_message/);
   assert.match(app, /AGENT SKETCH CONTEXT/);
   assert.match(app, /out\.agent_message/);

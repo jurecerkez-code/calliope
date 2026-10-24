@@ -2,9 +2,10 @@
   "private": true,
   "scripts": {
     "build": "vite build",
-    "test": "node --test test/test_frontend.mjs test/test_rough_payload.mjs test/test_shape_recognition.js test/test_fusion.js test/test_diagram.mjs"
+    "test": "node --test test/test_frontend.mjs test/test_rough_payload.mjs test/test_shape_recognition.js test/test_fusion.js test/test_diagram.mjs test/test_pi_edit.mjs"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "bits-ui": "^2.20.2",
     "shape-detector": "0.2.1"
   },
@@ -12,5 +13,8 @@
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "svelte": "^5.57.2",
     "vite": "^7.3.7"
+  },
+  "engines": {
+    "node": ">=22.19.0"
   }
 }
