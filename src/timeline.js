@@ -10,7 +10,7 @@ export function makePayload(stroke, t_end, viewport, enclosed_element) {
     id:stroke.id, tool:stroke.tool, t:stroke.t, t_end, pts, elements:[...stroke.elements],
     coordinate_space:'preview-document-css-pixels', viewport:{...viewport},
     viewBox:`0 0 ${viewport.width} ${viewport.height}`, bbox,
-    style: stroke.tool === 'pen' ? {color:'#00e05a',width:3} : {color:'#ffd166',width:18,opacity:0.45},
+    style: {color:'#00e05a',width:3},
     path:'M '+pts.map(p => `${p.x} ${p.y}`).join(' L '), enclosed_element
   };
   const summary = describeSketch(candidate);

@@ -33,10 +33,10 @@ function polygon(corners, { gap = 0, overshoot = 0, jitter = 1.4, samples = 12 }
 }
 const box = [[20, 20], [144, 16], [150, 82], [17, 85]];
 const triangle = [[60, 15], [137, 105], [13, 106]];
-function payload(points, tool = 'pen') {
+function payload(points) {
   const pts = points.map((p, i) => ({ ...p, utc: `2026-10-24T12:00:${String(i % 60).padStart(2, '0')}Z`, selector: 'button#outer', rect: { x: 0, y: 0, width: 200, height: 120 } }));
   const original = structuredClone(pts);
-  const result = makePayload({ id: 'rough', tool, t: 1, pts, elements: ['button#outer'] }, 2, { width: 300, height: 200 }, 'button#Inner');
+  const result = makePayload({ id: 'rough', tool: 'pen', t: 1, pts, elements: ['button#outer'] }, 2, { width: 300, height: 200 }, 'button#Inner');
   assert.deepEqual(pts, original, 'source points remain unchanged');
   assert.deepEqual(result.pts, original, 'full original path and metadata retained');
   assert.equal(result.path, 'M ' + pts.map(p => `${p.x} ${p.y}`).join(' L '));
@@ -72,7 +72,4 @@ for (const [name, points] of [
   const result = payload(pts);
   assert.equal(result.shape, 'freehand');
   assert.equal(result.enclosed_element, '');
-});
-test('highlighter stays a highlight even when looped', () => {
-  assert.equal(payload(oval(), 'highlighter').shape, 'highlight');
 });

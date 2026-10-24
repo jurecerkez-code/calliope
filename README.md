@@ -36,9 +36,9 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 
 ## What it does
 
-1. **You draw on the website itself.** No separate whiteboard. Visible pen/highlighter marks land on the preview; each completed stroke keeps its full path, UTC point times, DOM context, and a tentative shape label. Closed marks also get a best-effort element at their centre.
+1. **You draw on the website itself.** No separate whiteboard. Visible pen marks land on the preview; each completed stroke keeps its full path, UTC point times, DOM context, and a tentative shape label. Closed marks also get a best-effort element at their centre.
 2. **You speak while drawing.** Your microphone streams to Reson8. Dim lines are the live guess, solid lines are the committed sentence, all timestamped on the same clock as your marks.
-3. **The agent reasons, then executes.** On APPLY it reads transcript chunks with accepted strokes from the same time window. Recognized shapes lead with readable time, bounds, and target hints; unknown marks retain the raw SVG path. It writes one short paragraph of reasoning, then returns updated HTML for the preview.
+3. **The agent reasons, then executes in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It writes one short paragraph of reasoning, then returns updated HTML for the preview. Recording mode saves the same voice-and-mark timeline without calling the agent.
 
 <p align="center">
   <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Claude, preview" width="900">
@@ -51,7 +51,7 @@ Not every idea starts from a page. Choose **START BLANK CANVAS** on the opening 
 - **Shapes become nodes.** Boxes, circles and triangles (and any closed loop) become nodes N1, N2, ....
 - **Lines between shapes become edges.** A stroke that starts at one shape and ends at another becomes an edge E1, E2, ... in the direction you drew it. A small tick at its end is read as the arrowhead.
 - **Your words name things.** Point while you speak: "this is the API gateway", "here we have the user database", "call this the cache", "this sends the token". Each "this" or "here" binds to the mark drawn closest in time, using Reson8's word timestamps, and the name appears on the board.
-- **COPY FOR AGENT** puts a Mermaid diagram, every sentence with its timing and what it pointed at, and the full JSON on the clipboard. **COPY PNG** adds the drawing. Paste both into any agent (Claude, ChatGPT, Cursor, ...). No API key is needed for this mode, and typed sentences (SAY) work without a microphone.
+- **COPY FOR AGENT** puts a Mermaid diagram, every spoken sentence with its timing and what it pointed at, and the full JSON on the clipboard. **COPY PNG** adds the drawing. Paste both into any agent (Claude, ChatGPT, Cursor, ...). Speech needs a Reson8 key and network connection.
 
 ```mermaid
 flowchart LR
@@ -63,6 +63,13 @@ flowchart LR
 ```
 
 The canvas code is `src/board.js` (drawing surface and PNG) and `src/diagram.js` (nodes, edges, names, Mermaid). Time matching lives in `src/lib/fusion.js`.
+
+## Website operation modes
+
+- **RECORDING** keeps voice and marks on one clock without changing the page or calling the agent. **COPY ARTIFACT** exports a Markdown transcript and JSON with marks and paths.
+- **LIVE** sends each committed spoken turn and its marks to the agent, which changes the preview. Marks alone wait for speech; **APPLY** sends them now. Switching modes keeps the two timelines separate.
+
+Website URL fields are for importing a page, not typing instructions. Voice and drawing are the only instruction inputs.
 
 ## Why this shape
 
@@ -88,7 +95,7 @@ npm run build
 uv run server.py
 ```
 
-Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL or **START BLANK CANVAS**; no demo page loads automatically. On a website, press **MIC ON**, talk while drawing, then press **APPLY**. Without an Anthropic key, drawing works but APPLY reports that the agent is unavailable. The browser sends each completed stroke to the backend; failed deliveries can be retried, and APPLY refuses unaccepted strokes. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
+Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL or **START BLANK CANVAS**; no demo page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live sends committed turns automatically; **APPLY** sends marks without speech. Without an Anthropic key, drawing works but APPLY reports that the agent is unavailable. Live marks are sent to the backend; failed deliveries can be retried, and APPLY refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
 
 To use a website as the studio canvas, paste its public URL on the opening screen and press **IMPORT WEBSITE**. You can import another URL later in website mode. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import keeps you on the opening screen or leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, APPLY, and staged PUBLISH remain the studio's existing controls.
 
@@ -109,7 +116,7 @@ To use another website as the studio canvas, paste its public URL in **Website U
 
 ## Status
 
-**Working locally:** Svelte studio with the branded loader, pen/highlighter drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, Claude reasoning plus preview execution when keyed, and staged publish. The Chrome extension is a separate surface merged through PR #1; this studio change does not replace it.
+**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, Claude reasoning plus preview execution when keyed, and staged publish. The retired Chrome extension and classic page are no longer part of the app.
 
 **Not yet built:** identifying the individual printed word inside an element such as `h1` when circled. Current targeting reports the DOM element; word-range geometry needs its own implementation and browser checks. Shape fixtures are synthetic, so test real hand-drawn traces before treating a tentative label as reliable.
 

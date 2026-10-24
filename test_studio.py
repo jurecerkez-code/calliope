@@ -158,6 +158,20 @@ class StudioTest(unittest.TestCase):
             self.assertEqual(code, 200, response)
             agent.assert_called_once()
 
+    def test_only_pen_strokes_are_accepted(self):
+        stroke = self.stroke()
+        stroke['tool'] = 'highlighter'
+        stroke['style'] = {'color': '#ffd166', 'width': 18, 'opacity': 0.45}
+        code, _ = self.post('/api/strokes', stroke)
+        self.assertEqual(code, 400)
+        mark = {'id': stroke['id'], 'shape': 'highlight', 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': '', 'strokes': [stroke]}
+        code, _ = self.post('/api/marks', mark)
+        self.assertEqual(code, 400)
+        with server.STROKES_LOCK:
+            self.assertNotIn(stroke['id'], server.STROKES)
+            self.assertNotIn(stroke['id'], server.MARKS)
+
     def test_cross_origin_post_cannot_invoke_agent_or_stage_content(self):
         request = {'bundles': [], 'current_html': '<html></html>'}
         with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
