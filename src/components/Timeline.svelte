@@ -3,12 +3,14 @@
   import Asterisk from './brand/Asterisk.svelte';
   let { marks = [], utterances = [], now = 0, fmt } = $props();
   const STEPS = [1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000];
-  // the scale covers every mark and word, so nothing said or drawn falls off the end
-  const latest = $derived(Math.max(now, ...marks.map(m => m.endMs), ...utterances.map(u => u.endMs)));
-  const span = $derived(Math.max(10000, Math.ceil((latest + 500) / 1000) * 1000));
-  const step = $derived(STEPS.find(s => span / s <= 6) || STEPS.at(-1));
-  const ticks = $derived(Array.from({ length: Math.floor(span / step) + 1 }, (_, i) => i * step));
-  const pct = ms => Math.min(100, Math.max(0, ms / span * 100));
+  // The window frames what was actually drawn and said, with a little air either side,
+  // so quiet minutes before the first mark never squeeze the events into one corner.
+  const times = $derived([...marks.flatMap(m => [m.startMs, m.endMs]), ...utterances.flatMap(u => [u.startMs, u.endMs])]);
+  const start = $derived(times.length ? Math.max(0, Math.floor((Math.min(...times) - 1500) / 1000) * 1000) : 0);
+  const span = $derived(Math.max(8000, Math.ceil(((times.length ? Math.max(...times) : now) + 1500 - start) / 1000) * 1000));
+  const step = $derived(STEPS.find(s => span / s <= 4) || STEPS.at(-1));
+  const ticks = $derived(Array.from({ length: Math.floor(span / step) + 1 }, (_, i) => start + i * step));
+  const pct = ms => Math.min(100, Math.max(0, (ms - start) / span * 100));
   const refs = $derived(utterances.flatMap(u => u.references));
   const lastRef = $derived(refs.findLast(r => r.strokeId));
   const last = $derived(utterances.at(-1));
@@ -36,14 +38,14 @@
           <span class="word" style="left:{pct(w.startMs)}%;width:{Math.max(.5, pct(w.endMs) - pct(w.startMs))}%">{#each bars(w.text) as h}<b style="height:{h}%"></b>{/each}</span>
         {/each}
       {/each}
-      {#if last}<span class="bubble" style="left:{pct((last.startMs + last.endMs) / 2)}%">"{last.text}"</span>{/if}
+      {#if last}<span class="bubble" style="left:{Math.min(78, Math.max(22, pct((last.startMs + last.endMs) / 2)))}%">"{last.text}"</span>{/if}
     </div>
   </div>
   <div class="lane">
     <span class="name"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></svg>References</span>
     <div class="track refs">{#each refs as r, i (i)}<i class="dot" class:bound={r.strokeId} style="left:{pct(r.atMs)}%" title={r.word || 'nearest in time'}></i>{/each}</div>
   </div>
-  <i class="head" style="left:calc(96px + (100% - 96px) * {pct(now) / 100})"></i>
+  {#if now >= start && now <= start + span}<i class="head" style="left:calc(96px + (100% - 96px) * {pct(now) / 100})"></i>{/if}
 </div>
 
 <style>
@@ -52,6 +54,7 @@
   .scale { position: relative; height: 18px; font: 11px var(--mono); color: var(--muted); }
   .scale span { position: absolute; transform: translateX(-50%); }
   .scale span:first-child { transform: none; }
+  .scale span:last-child:not(:first-child) { transform: translateX(-100%); }
   .name { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); }
   .name svg { width: 16px; height: 16px; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .lane:nth-of-type(2) svg { stroke: var(--red); }

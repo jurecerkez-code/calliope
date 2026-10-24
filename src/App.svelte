@@ -39,6 +39,8 @@
   let strokeTargets = new Map(), strokeCount = 0, handCursor = 'crosshair';
   function remember(kind,item){history={...history,[kind]:[...history[kind],item]};}
   function forget(kind){history={...history,[kind]:[]};}
+  // Server statuses arrive in capitals; show them as sentences.
+  const sentence = s => String(s||'').toLowerCase().replace(/(^|[.!?]\s+)(\p{L})/gu,(m,a,b)=>a+b.toUpperCase()).replace(/\breson8\b/g,'Reson8').replace(/\bjson\b/g,'JSON').replace(/\bmarkdown\b/g,'Markdown').replace(/\burl\b/g,'URL');
   const clock = ms => fmt(Math.max(0,ms))+'.'+String(Math.max(0,Math.round(ms))%1000).padStart(3,'0');
   // Pair each turn with the references buildBundles resolved for it (same order, same text).
   const lanes = $derived.by(() => {
@@ -432,7 +434,7 @@
   </section>
 
   <section class="frame" hidden={mode==='start'}>
-    <div class="chrome"><span class="lights"><i></i><i></i><i></i></span><p id="status" role="status"><span class="sc">{status}</span></p></div>
+    <div class="chrome"><span class="lights"><i></i><i></i><i></i></span><p id="status" role="status">{sentence(status)}</p></div>
     <div class="sheet">
       <div id="prevWrap" hidden={mode!=='website'}><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe>{#if !imported}<p class="empty-preview">Paste a public URL above to begin.</p>{/if}</div>
       <div id="boardWrap" hidden={mode!=='canvas'}><svg id="board" bind:this={boardEl} role="img" aria-label="Drawing board"></svg></div>
@@ -500,9 +502,9 @@
         </section>
         {#if operation==='recording'}
           <div class="actions"><Button id="btnCopy" variant="primary" onclick={copyArtifact}><span class="sc">COPY ARTIFACT</span></Button></div>
-          <p class="fine"><span class="sc">RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.</span></p>
+          <p class="fine">{sentence('RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.')}</p>
         {:else}
-          <p class="fine"><span class="sc">LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY.</span>{#if !publishEnabled}{' '}<span class="sc">REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED.</span>{/if}</p>
+          <p class="fine">{sentence('LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY.')}{#if !publishEnabled}{' '+sentence('REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED.')}{/if}</p>
         {/if}
       {:else}
         <ol class="steps"><li class:done={nodes.length}><span class="n">1</span><h3>The diagram so far</h3>
@@ -525,7 +527,7 @@
         <div id="feed" bind:this={feed}>
           {#each rows as row (row.key)}
             <button type="button" class="session-item" onclick={() => openDetail(row)}>
-              <span class:err={row.cls==='err'} class="session-title sc">{rowLabel(row)}</span>
+              <span class:err={row.cls==='err'} class="session-title">{sentence(rowLabel(row))}</span>
               <span class="session-meta">{row.clock}{row.state ? ` · ${row.state}` : ''}{row.copyText ? ' · VIEW FULL TEXT' : ''}</span>
             </button>
           {/each}
