@@ -10,13 +10,11 @@ import select
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-GET_PATHS = {'/', '/index.html', '/jamie-mock.html', '/api/config', '/loader3d.js',
-             '/assets/logos.glb'}
+GET_PATHS = {'/', '/index.html', '/jamie-mock.html', '/api/config'}
 POST_PATHS = {'/api/import', '/api/strokes', '/api/strokes/readback',
               '/api/marks', '/api/marks/readback', '/api/apply', '/api/trace'}
 BUNDLE = re.compile(r'/assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8,}\.(?:js|css)\Z')
 IMAGE = re.compile(r'/assets/[A-Za-z0-9_.-]+\.(?:svg|png)\Z')
-VENDOR = re.compile(r'/vendor/(?:(?:three\.module|RoomEnvironment|GLTFLoader)\.js|utils/BufferGeometryUtils\.js)\Z')
 WS_KEY = re.compile(r'[A-Za-z0-9+/]{22}==\Z')
 
 
@@ -46,7 +44,7 @@ def make_handler(owner, http_port, audio_port):
                 if self.path != '/':
                     return self.reply(404)
                 return self.audio()
-            allowed = (self.path in GET_PATHS or bool(BUNDLE.fullmatch(self.path) or IMAGE.fullmatch(self.path) or VENDOR.fullmatch(self.path))) if self.command == 'GET' else self.path in POST_PATHS
+            allowed = (self.path in GET_PATHS or bool(BUNDLE.fullmatch(self.path) or IMAGE.fullmatch(self.path))) if self.command == 'GET' else self.path in POST_PATHS
             if not allowed:
                 return self.reply(404)
             sent = False

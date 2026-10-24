@@ -37,7 +37,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 3. **The agent changes the preview in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It returns updated HTML; no written reasoning is required. Recording mode saves the same voice-and-mark timeline without calling the agent.
 
 <p align="center">
-  <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Claude, preview" width="900">
+  <img src="assets/flow-v2.svg" alt="The loop: you, one clock, Reson8, Claude, preview" width="900">
 </p>
 
 ## Blank canvas mode

@@ -16,6 +16,7 @@
     const barTimer = setInterval(() => {
       const t = Math.min(1, (performance.now() - startedAt) / 4500);
       advance(Math.min(100, 8 + 92 * (1 - (1 - t) * (1 - t))));
+      if (t === 1) finish();
     }, 120);
     const onKey = event => {
       if (['Enter', ' ', 'Escape'].includes(event.key)) finish();
