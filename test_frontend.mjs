@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildBundles, makePayload, canApply } from './src/timeline.js';
 import { describeSketch } from './src/shape.js';
-import { makeMark, createMarkQueue } from './src/marks.js';
+import { makeMark, createMarkQueue, MARK_SETTLE_DELAY_MS } from './src/marks.js';
 import { readFileSync } from 'node:fs';
 
 const pts = [[10,20], [25,30], [40,20]].map(([x,y]) => ({x,y,utc:'2026-10-24T12:00:00Z',selector:'button#download',text:'Download',rect:null}));
@@ -78,6 +78,24 @@ test('delivery waits for the recognition window and APPLY flushes it', async () 
   assert.equal(sent[0].shape,'x');
   assert.deepEqual(sent[0].strokes,[first,second]);
   assert.equal(timers.size,0);
+});
+
+test('a natural pause between X strokes does not send the first one', async () => {
+  const sent=[], scheduled=[];
+  const queue=createMarkQueue({onSettled:mark=>sent.push(mark),
+    setTimer:(fn,delay)=>{scheduled.push({fn,delay});return scheduled.length;},clearTimer:()=>{}});
+  const first=slash('one',[10,10],[110,110],1), second=slash('two',[110,10],[10,110],900);
+  queue.add(first);
+  assert.equal(MARK_SETTLE_DELAY_MS,2000);
+  assert.equal(scheduled[0].delay,2000);
+  assert.equal(sent.length,0);
+  queue.hold(); // pointerdown of the second stroke cancels the pending settlement
+  queue.add(second);
+  await queue.flush();
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].shape,'x');
+  assert.deepEqual(sent[0].strokes,[first,second]);
+  assert.match(readFileSync(new URL('./src/App.svelte', import.meta.url),'utf8'),/WAITING UP TO.*NEXT STROKE/);
 });
 
 test('expiry sends a single mark; unrelated strokes remain separate messages', async () => {

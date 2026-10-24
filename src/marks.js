@@ -1,4 +1,5 @@
 // A mark is one settled recognition over one or more immutable stroke payloads.
+export const MARK_SETTLE_DELAY_MS = 2000;
 function crossing(a, b) {
   if (a.tool !== 'pen' || b.tool !== 'pen' || a.viewBox !== b.viewBox) return false;
   const ends = s => [s.pts[0], s.pts.at(-1)];
@@ -28,7 +29,7 @@ export function makeMark(strokes) {
     strokes:Object.freeze([...strokes])});
 }
 
-export function createMarkQueue({delay=600,onSettled,setTimer=setTimeout,clearTimer=clearTimeout}) {
+export function createMarkQueue({delay=MARK_SETTLE_DELAY_MS,onSettled,setTimer=setTimeout,clearTimer=clearTimeout}) {
   let pending=[], timer=null;
   const inFlight=new Set();
   function cancel() { if (timer !== null) clearTimer(timer); timer=null; }

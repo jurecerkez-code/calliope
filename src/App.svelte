@@ -5,7 +5,7 @@
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
   import { buildBundles, canApply } from './timeline.js';
-  import { createMarkQueue } from './marks.js';
+  import { createMarkQueue, MARK_SETTLE_DELAY_MS } from './marks.js';
   import { createAudio } from './audio.js';
   let feed, prev, eq;
   let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
@@ -57,7 +57,7 @@
     onFinish:(stroke,payload,summary)=>{
       stroke.payload=payload;stroke.summary=summary;
       activeStroke=false;
-      rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,'PENDING RECOGNITION')}:row);
+      rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,`WAITING UP TO ${MARK_SETTLE_DELAY_MS/1000}S FOR NEXT STROKE`)}:row);
       markQueue.add(payload);
     }
   });}
