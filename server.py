@@ -113,6 +113,52 @@ def _clip(v, n=200) -> str:
     return re.sub(r"[\x00-\x1f]", " ", str(v if v is not None else ""))[:n]
 
 
+def is_website_loop(stroke) -> bool:
+    """Match the closed-loop cases in src/lib/strokes.js classifyShape()."""
+    points = stroke['pts']
+    box = stroke['bbox']
+    diagonal = math.hypot(box['width'], box['height'])
+    length = sum(math.hypot(b['x'] - a['x'], b['y'] - a['y']) for a, b in zip(points, points[1:]))
+    if diagonal < 12 or length < 15:
+        return False
+    gap = math.hypot(points[-1]['x'] - points[0]['x'], points[-1]['y'] - points[0]['y'])
+
+    # Same iterative Ramer-Douglas-Peucker reduction at epsilon=4, then the
+    # sharp-reversal guard that keeps scribbles from becoming loop marks.
+    keep = {0, len(points) - 1}
+    stack = [(0, len(points) - 1)]
+    while stack:
+        start, end = stack.pop()
+        a, b = points[start], points[end]
+        dx, dy = b['x'] - a['x'], b['y'] - a['y']
+        distance = math.hypot(dx, dy)
+        def perpendicular(p):
+            if not distance:
+                return math.hypot(p['x'] - a['x'], p['y'] - a['y'])
+            return abs(dy * p['x'] - dx * p['y'] + b['x'] * a['y'] - b['y'] * a['x']) / distance
+        largest, index = 0, -1
+        for i in range(start + 1, end):
+            d = perpendicular(points[i])
+            if d > largest:
+                largest, index = d, i
+        if largest > 4 and index != -1:
+            keep.add(index)
+            stack.extend([(start, index), (index, end)])
+    simple = [points[i] for i in sorted(keep)]
+    reversals = 0
+    for a, b, c in zip(simple, simple[1:], simple[2:]):
+        u = (b['x'] - a['x'], b['y'] - a['y'])
+        v = (c['x'] - b['x'], c['y'] - b['y'])
+        magnitude = math.hypot(*u) * math.hypot(*v)
+        if magnitude and (u[0] * v[0] + u[1] * v[1]) / magnitude < -0.5:
+            reversals += 1
+    if reversals >= 3 and gap / length < 0.5:
+        return False
+    if gap < max(25, diagonal * .25) and length > diagonal * 1.6:
+        return True
+    return gap / length <= 0.8 and length > diagonal * 2
+
+
 def valid_relations(relations, marks) -> bool:
     """Only describe arrows backed by accepted marks in this APPLY turn."""
     if not isinstance(relations, list) or len(relations) > 50:
@@ -138,15 +184,9 @@ def valid_relations(relations, marks) -> bool:
             if len(mark['strokes']) != 1 or mark['shape'] == 'x':
                 continue
             stroke = mark['strokes'][0]
-            if stroke['shape'] not in ('circle', 'square', 'triangle') and stroke['tool'] != 'highlighter':
-                # The client also recognizes freehand closed loops as marks.
-                pts = stroke['pts']
-                length = sum(math.hypot(b['x'] - a['x'], b['y'] - a['y']) for a, b in zip(pts, pts[1:]))
-                diagonal = math.hypot(stroke['bbox']['width'], stroke['bbox']['height'])
-                if not (diagonal >= 12 and length >= 15 and
-                        math.hypot(pts[-1]['x'] - pts[0]['x'], pts[-1]['y'] - pts[0]['y']) < max(25, diagonal * .25)
-                        and length > diagonal * 1.6):
-                    continue
+            if (stroke['shape'] not in ('circle', 'square', 'triangle') and
+                    stroke['tool'] != 'highlighter' and not is_website_loop(stroke)):
+                continue
             box = stroke['bbox']
             if box['x'] - 28 <= point['x'] <= box['x'] + box['width'] + 28 and box['y'] - 28 <= point['y'] <= box['y'] + box['height'] + 28:
                 candidates.append(stroke)

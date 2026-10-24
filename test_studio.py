@@ -132,6 +132,32 @@ class StudioTest(unittest.TestCase):
                                                 [item(first), item(second), item(pointing)]))
         self.assertFalse(server.valid_relations([link], [{**item(first), 't': 'not-a-time'}, item(second), item(arrow)]))
 
+    def test_open_loop_mark_arrow_reaches_agent(self):
+        # The website classifier accepts an open C: path length > twice its diagonal.
+        loop = {**self.stroke(), 'id': 'open-loop', 'shape': 'freehand', 'enclosed_element': '',
+                'pts': [{**self.stroke()['pts'][0], 'x': x, 'y': y}
+                        for x, y in [(20, 20), (100, 20), (100, 80), (20, 80), (20, 60)]],
+                'bbox': {'x': 20, 'y': 20, 'width': 80, 'height': 60},
+                'path': 'M 20 20 L 100 20 L 100 80 L 20 80 L 20 60'}
+        arrow = {**self.stroke(), 'id': 'open-loop-arrow', 'shape': 'freehand', 'enclosed_element': '',
+                 't': 30, 't_end': 40,
+                 'pts': [{**loop['pts'][0], 'x': 25, 'y': 60},
+                         {**loop['pts'][0], 'x': 220, 'y': 60, 'selector': 'section#destination', 'text': 'Destination'}],
+                 'bbox': {'x': 25, 'y': 60, 'width': 195, 'height': 0}, 'path': 'M 25 60 L 220 60'}
+        items = [{'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
+                  't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
+                  'strokes': [stroke]} for stroke in (loop, arrow)]
+        relation = {'kind': 'move', 'arrow': arrow['id'], 'from': {'stroke': loop['id'], 'target': 'h1'},
+                    'to': {'stroke': None, 'target': 'section#destination', 'text': 'Destination',
+                           'x': 220, 'y': 60}}
+        self.assertTrue(all(server.valid_mark(item) for item in items))
+        for item in items:
+            self.assertEqual(self.post('/api/marks', item)[0], 201)
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
+            code, response = self.post('/api/apply', {'bundles': [{'strokes': items}], 'relations': [relation]})
+            self.assertEqual(code, 200, response)
+            agent.assert_called_once()
+
     def test_cross_origin_post_cannot_invoke_agent_or_stage_content(self):
         request = {'bundles': [], 'current_html': '<html></html>'}
         with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:

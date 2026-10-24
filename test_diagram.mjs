@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDiagram, buildCanvasPacket, canvasPacketText, nameFrom, edgeLabelFrom, toMermaid } from './src/diagram.js';
 import { simulateWords } from './src/lib/fusion.js';
+import { makePayload } from './src/timeline.js';
 
 // Strokes as a person would draw them: t in ms on the session clock.
 function rect(id, x, y, w, h, t0) {
@@ -107,4 +108,21 @@ test('website: an earlier arrow cannot acquire a mark drawn later', async () => 
   const later = payload('m', 'pen', 'circle', ring(200, 200, 50), { enclosed_element: 'button.btn "Download"' });
   assert.deepEqual(websiteRelations([arrow, later]), []);
   assert.equal(websiteRelations([later, arrow])[0].kind, 'move');
+});
+
+test('website: a freehand open C is a mark for an arrow drawn afterward', async () => {
+  const { websiteRelations } = await import('./src/diagram.js');
+  const point=(x,y,selector='h1',text='')=>({x,y,utc:'2026-10-24T12:00:00Z',selector,text,rect:null});
+  const loop=makePayload({id:'open-loop',tool:'pen',t:10,
+    pts:[[20,20],[100,20],[100,80],[20,80],[20,60]].map(([x,y])=>point(x,y)),elements:['h1']},
+    20,{width:949,height:2862},'');
+  const arrow=makePayload({id:'open-loop-arrow',tool:'pen',t:30,
+    pts:[point(25,60),point(220,60,'section#destination','Destination')],elements:['h1']},
+    40,{width:949,height:2862},'');
+  assert.equal(loop.shape,'freehand');
+  assert.deepEqual(websiteRelations([{id:loop.id,shape:loop.shape,strokes:[loop]},
+    {id:arrow.id,shape:arrow.shape,strokes:[arrow]}]),[{
+    kind:'move',arrow:'open-loop-arrow',from:{stroke:'open-loop',target:'h1'},
+    to:{stroke:null,target:'section#destination',text:'Destination',x:220,y:60}
+  }]);
 });
