@@ -622,6 +622,88 @@ class StudioTest(unittest.TestCase):
             code, result = self.post('/api/apply', payload)
             self.assertEqual(code, 503, result)
 
+    def test_openrouter_cerebras_uses_existing_pi_edit_loop(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter', create=True), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-router', create=True), \
+             patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-lyceum'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), stop_reply('Done.')]
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result['html'], original.replace('Old', 'Updated'))
+        self.assertEqual(result['reasoning'], 'Done.')
+        calls = opener.return_value.open.call_args_list
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            request = call.args[0]
+            body = json.loads(request.data)
+            self.assertEqual(request.full_url, 'https://openrouter.ai/api/v1/chat/completions')
+            self.assertEqual(request.get_header('Authorization'), 'Bearer test-router')
+            self.assertEqual(body['model'], 'openai/gpt-oss-120b')
+            self.assertEqual(body['provider'], {'only': ['cerebras'], 'allow_fallbacks': False})
+            self.assertEqual(body['reasoning'], {'effort': 'low'})
+            self.assertNotIn('reasoning_effort', body)
+            self.assertEqual(body['tools'][0]['function']['name'], 'edit')
+        self.assertEqual(json.loads(calls[-1].args[0].data)['messages'][-1]['role'], 'tool')
+
+    def test_selected_openrouter_missing_key_does_not_fall_back(self):
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter', create=True), \
+             patch.object(server, 'OPENROUTER_KEY', '', create=True), \
+             patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-lyceum'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            code, result = self.post('/api/apply', {'bundles': [],
+                'current_html': '<html><body>Old</body></html>'})
+        self.assertEqual(code, 503, result)
+        opener.assert_not_called()
+
+    def test_explicit_lyceum_overrides_anthropic_key(self):
+        with patch.object(server, 'AGENT_PROVIDER', 'lyceum', create=True), \
+             patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-lyceum'), \
+             patch.object(server, 'lyceum_apply', return_value={'html': '<html>Lyceum</html>'}) as chosen, \
+             patch.object(server, 'claude_apply') as other:
+            code, result = self.post('/api/apply', {'bundles': [],
+                'current_html': '<html><body>Old</body></html>'})
+        self.assertEqual(code, 200, result)
+        chosen.assert_called_once()
+        other.assert_not_called()
+
+    def test_openrouter_failed_tool_turn_keeps_old_document(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter', create=True), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-router', create=True), \
+             patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), b'{bad reply']
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': original})
+        self.assertEqual(code, 502, result)
+        self.assertNotIn('html', result)
+        self.assertEqual(opener.return_value.open.call_count, 2)
+
+    def test_openrouter_preserves_reasoning_on_tool_followup(self):
+        first = json.loads(tool_reply())
+        first['choices'][0]['message'].update(reasoning='Working through edit',
+            reasoning_details=[{'type': 'reasoning.text', 'text': 'Working through edit',
+                                'signature': 'opaque-signature'}])
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter', create=True), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-router', create=True), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                json.dumps(first).encode(), stop_reply('Done.')]
+            code, result = self.post('/api/apply', {'bundles': [],
+                'current_html': '<html><body><h1>Old</h1></body></html>'})
+        self.assertEqual(code, 200, result)
+        followup = json.loads(opener.return_value.open.call_args_list[1].args[0].data)
+        assistant = followup['messages'][-2]
+        self.assertEqual(assistant['reasoning'], first['choices'][0]['message']['reasoning'])
+        self.assertEqual(assistant['reasoning_details'],
+                         first['choices'][0]['message']['reasoning_details'])
+
     def test_invalid_or_oversized_documents_never_reach_provider(self):
         for html in (None, '<h1>fragment</h1>', '<html/>', '<!-- <html></html> -->',
                      '<html><script>let s="</html>"', '<html></html><html></html>',
