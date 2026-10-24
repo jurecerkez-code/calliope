@@ -10,7 +10,7 @@
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
-  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow } from './modes.js';
+  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents } from './modes.js';
   let feed, prev, eq, boardEl, detailDialog;
   let detailField = $state(null);
   let selectedRow = $state(null);
@@ -20,11 +20,11 @@
   let secure = $state(false), publishEnabled = $state(true);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
   let mode = $state('start'), operation = $state('live'), nodes = $state([]), edges = $state([]);
-  let board = null, canvasUtts = [], nextUtt = 1, modeVersion = 0;
+  let board = null, canvasUtts = [], nextUtt = 1, modeVersion = 0, speechCapture = null;
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
-  let timeline = [], deliveries = {}, pending = {}, strokeModes = new Map(), drawing = null, audio = null, activeStroke = false;
+  let timeline = [], deliveries = {}, pending = {}, strokeModes = new Map(), drawing = null, audio = null, activeStroke = false, strokeWaiters = [], providerFailed = false;
   const elapsed = () => Date.now()-started;
 
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
@@ -52,7 +52,12 @@
       deliveries[mark.id]='accepted';updateRow(mark,'ACCEPTED',ack.agent_message);
     }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
   }
-  function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
+  async function retry(row){
+    if(row.mark && deliveries[row.mark.id]==='failed'){
+      await deliver(row.mark);
+      if(deliveries[row.mark.id]==='accepted' && !providerFailed)requestApply();
+    }
+  }
   function rowLabel(row){
     const mark=row.mark || row.stroke?.payload;
     if(mark)return `${mark.shape.toUpperCase()} · ${mark.enclosed_element || mark.elements?.[0] || mark.strokes?.[0]?.elements?.[0] || 'PAGE'}`;
@@ -98,6 +103,7 @@
       activeStroke=false;
       rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,`WAITING UP TO ${MARK_SETTLE_DELAY_MS/1000}S FOR NEXT STROKE`)}:row);
       markQueue.add(payload);
+      strokeWaiters.splice(0).forEach(resolve=>resolve());
     }
   });}
   function clearMarks(){
@@ -121,26 +127,41 @@
     finally{busy=false;}
   }
   async function toggleMic(){
-    if(micOn){audio?.stop();micOn=false;return;}
-    try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
+    if(micOn){audio?.stop();micOn=false;speechCapture=null;return;}
+    try{await audio.start();micOn=true;speechCapture={mode,operation};}catch(err){addLine('err','MIC FAILED: '+err.message);}
   }
   async function apply(force=false){
-    if(mode!=='website'||operation!=='live'||busy)return;
-    if(activeStroke){addLine('err','FINISH DRAWING BEFORE APPLY');return;}
+    if(mode!=='website'||operation!=='live'||busy||(!force&&providerFailed))return;
     const runModeVersion=modeVersion;
+    if(activeStroke){
+      if(force){addLine('err','FINISH DRAWING BEFORE APPLY');return;}
+      await new Promise(resolve=>strokeWaiters.push(resolve));
+    }
+    if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
     busy=true;
+    let invoked=false;
     try{
       await markQueue.flush();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
-      const sent=eventsForMode(timeline,'live');
-      const bundles=buildBundles(sent), marks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
+      const live=eventsForMode(timeline,'live');
+      const allRelations=websiteRelations(live.filter(e=>e.kind==='stroke').map(e=>e.payload));
+      const sent=nextLiveEvents(live,allRelations);
+      if(!force&&!sent.some(e=>e.kind==='transcript'))return;
+      const marks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
+      const turn=sent.find(e=>e.kind==='transcript');
+      const bundle=turn ? buildBundles(sent).find(b=>b.transcript===turn.text) : buildBundles(sent)[0];
+      const bundles=bundle?[{...bundle,strokes:marks}]:[];
       if(!bundles.length){status='NOTHING NEW FOR THE AGENT.';return;}
-      const relations=websiteRelations(marks).slice(0,50);
-      if(!force&&awaitingMoveArrow(sent,relations)){status='DRAW AN ARROW TO COMPLETE THE MOVE, OR PRESS APPLY TO SEND SPEECH ONLY.';return;}
+      const relations=allRelations.filter(r=>marks.some(mark=>mark.strokes.some(s=>s.id===r.from?.stroke))&&
+        marks.some(mark=>mark.id===r.arrow)).slice(0,50);
+      if(!force&&!relations.some(r=>r.kind==='move'||r.kind==='link')&&awaitingMoveArrow(sent,relations)){
+        status='DRAW AN ARROW TO COMPLETE THE MOVE, OR PRESS APPLY TO SEND SPEECH ONLY.';return;
+      }
       await Promise.all(marks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
       status='LYCEUM IS REASONING...';
+      invoked=true;
       const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations,current_html:currentHtml})});
       const out=await response.json();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
@@ -148,8 +169,13 @@
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
       previewHtml(out.html);timeline=timeline.filter(e=>!sent.includes(e));
+      providerFailed=false;
       addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
-    }catch(err){if(mode==='website'&&operation==='live'&&modeVersion===runModeVersion){addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';}}
+      if(timeline.some(e=>e.kind==='transcript'&&e.mode==='live'))requestApply();
+    }catch(err){if(mode==='website'&&operation==='live'&&modeVersion===runModeVersion){
+      if(invoked)providerFailed=true;
+      addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';
+    }}
     finally{busy=false;}
   }
   const requestApply=createLiveQueue(apply);
@@ -215,7 +241,8 @@
   }
   async function downloadPng(){const blob=await board.exportPng();if(blob)download(blob);else addLine('err','NOTHING DRAWN YET.');}
   function setMode(m){
-    if(m===mode)return;
+    if(m===mode||busy)return;
+    if(micOn)speechCapture={mode:'website',operation:'recording'};
     mode=m;modeVersion++;
     status=m==='canvas'?'BLANK CANVAS. DRAW AND EXPLAIN OUT LOUD; NAME THINGS BY POINTING: "THIS IS THE API".':
       operation==='live'?'LIVE: SPOKEN TURNS CHANGE THE PREVIEW.':'RECORDING: COPY YOUR WORDS AND MARKS. NO AGENT CALL.';
@@ -227,7 +254,8 @@
     if(eventsForMode(timeline,'live').length)requestApply();
   }
   function setOperation(next){
-    if(next===operation)return;
+    if(next===operation||busy)return;
+    if(micOn)speechCapture={mode:'website',operation:'recording'};
     const flushed=markQueue.flush();
     operation=next;modeVersion++;
     status=next==='live'?'LIVE: SPOKEN TURNS CHANGE THE PREVIEW.':'RECORDING: COPY YOUR WORDS AND MARKS. NO AGENT CALL.';
@@ -237,11 +265,15 @@
   onMount(()=>{
     board=attachBoard(boardEl,{elapsed,onStroke:onCanvasStroke});
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
-      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurn:turn=>{
-        if(mode==='canvas') addCanvasUtterance(turn,'reson8');
-        else if(mode==='website'){
-          timeline.push({kind:'transcript',mode:operation,t:turn.startMs,t_end:turn.endMs,text:turn.text,words:turn.words});
-          if(operation==='live')requestApply();
+      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurnStart:()=>{
+        speechCapture={mode,operation};
+      },onTurn:turn=>{
+        const origin=speechCapture ?? {mode,operation:'recording'};
+        speechCapture={mode,operation};
+        if(origin.mode==='canvas') addCanvasUtterance(turn,'reson8');
+        else if(origin.mode==='website'){
+          timeline.push({kind:'transcript',mode:origin.operation,t:turn.startMs,t_end:turn.endMs,text:turn.text,words:turn.words});
+          if(origin.operation==='live'&&mode==='website'&&operation==='live')requestApply();
         }
       }});
       secure=window.isSecureContext;

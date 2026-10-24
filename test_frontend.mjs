@@ -111,7 +111,7 @@ test('unpointed marks respect the before and after association windows', () => {
 test('audio maps stream-relative word times independently of turn start, even with sparse finals', async () => {
   const saved = new Map();
   const set = (key,value) => {saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});};
-  let socket, processor, received;
+  let socket, processor, received, starts=0;
   class FakeSocket {constructor(){socket=this;this.readyState=1;}send(){}close(){}}
   try {
     set('window',{isSecureContext:true});set('location',{protocol:'http:',hostname:'127.0.0.1'});
@@ -125,15 +125,17 @@ test('audio maps stream-relative word times independently of turn start, even wi
       createScriptProcessor(){processor={connect(){}};return processor;}
       close(){}
     });
-    const audio=createAudio({getContext:()=>({fillRect(){}})},{port:8801,elapsed:()=>5000,onLine:()=>{},onTurn:turn=>{received=turn;}});
+    const audio=createAudio({getContext:()=>({fillRect(){}})},{port:8801,elapsed:()=>5000,onLine:()=>{},onTurnStart:()=>{starts++;},onTurn:turn=>{received=turn;}});
     await audio.start();socket.onopen();
     processor.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(4096)}});
+    socket.onmessage({data:JSON.stringify({type:'turn_start'})});
     socket.onmessage({data:JSON.stringify({type:'turn_end_candidate',text:'make this green',start_ms:1000,duration_ms:1200,words:[
       {text:'make',start_ms:1000,duration_ms:200},{text:'this',start_ms:1300,duration_ms:200},{text:'green',start_ms:1700,duration_ms:300}
     ]})});
     socket.onmessage({data:JSON.stringify({type:'turn_end',text:'make this green',start_ms:null,duration_ms:null,words:[]})});
     assert.deepEqual([received.startMs,received.endMs],[5744,6944]);
     assert.deepEqual(received.words[1],{text:'this',startMs:6044,endMs:6244});
+    assert.equal(starts,1);
     audio.destroy();
   } finally {
     for(const [key,d] of saved){if(d)Object.defineProperty(globalThis,key,d);else delete globalThis[key];}
@@ -355,11 +357,59 @@ test('live queue never runs two agent calls at once and re-runs once for request
   assert.equal(maxActive, 1);
 });
 
+test('live requests select one completed turn and only its captured sketches', async () => {
+  const { nextLiveEvents } = await import('./src/modes.js');
+  const first={kind:'transcript',mode:'live',text:'change the heading',t:100,t_end:200};
+  const second={kind:'transcript',mode:'live',text:'change the button',t:300,t_end:400};
+  const mark=(id,t,t_end)=>({kind:'stroke',mode:'live',t,t_end,payload:{id}});
+  const old=mark('old',10,20), during=mark('during',150,180), later=mark('later',350,380);
+  const events=[old,first,second,later,during];
+  assert.deepEqual(nextLiveEvents(events,[]),[first,during]);
+  assert.deepEqual(nextLiveEvents(events.filter(e=>e!==first&&e!==during),[]),[second,later]);
+  assert.deepEqual(nextLiveEvents([old],[]),[old]); // manual sketch-only send
+});
+
+test('a move keeps its spoken source and a later arrow, not another turn', async () => {
+  const { nextLiveEvents, awaitingMoveArrow } = await import('./src/modes.js');
+  const source={kind:'stroke',mode:'live',t:100,t_end:125,payload:{id:'source',shape:'circle',
+    strokes:[{id:'source',shape:'circle'}]}};
+  const turn={kind:'transcript',mode:'live',t:140,t_end:170,text:'move this'};
+  const arrow={kind:'stroke',mode:'live',t:210,t_end:230,payload:{id:'arrow',shape:'freehand',
+    strokes:[{id:'arrow',shape:'freehand',tool:'pen',pts:[{x:10,y:10},{x:200,y:20}]}]}};
+  const next={kind:'transcript',mode:'live',t:300,t_end:370,text:'make it green'};
+  const relation={kind:'move',from:{stroke:'source'},arrow:'arrow'};
+  assert.equal(awaitingMoveArrow(nextLiveEvents([source,turn],[]),[]),true);
+  assert.deepEqual(nextLiveEvents([source,turn,arrow,next],[relation]),[turn,source,arrow]);
+  const distant={...source,t:10,t_end:25};
+  const lateTurn={...turn,t:12000,t_end:13000};
+  const lateArrow={...arrow,t:13100,t_end:13120};
+  assert.deepEqual(nextLiveEvents([distant,lateTurn,lateArrow],[relation]),[lateTurn]);
+  const competing={...source,t:12010,t_end:12030,payload:{...source.payload,id:'new',
+    strokes:[{id:'new',shape:'circle'}]}};
+  assert.deepEqual(nextLiveEvents([distant,lateTurn,competing,lateArrow],[relation]),[lateTurn,competing]);
+  const before={...source,t:11980,t_end:11990};
+  const competingRelation={...relation,from:{stroke:'source'}};
+  assert.deepEqual(nextLiveEvents([before,lateTurn,competing,lateArrow],[competingRelation]),
+    [lateTurn,before,competing,lateArrow]);
+});
+
+test('the live studio triggers turn-scoped execution and waits for an active stroke', () => {
+  const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
+  assert.match(app,/if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)requestApply\(\)/);
+  assert.match(app,/speechCapture=\{mode,operation\}/);
+  assert.match(app,/nextLiveEvents\(live,allRelations\)/);
+  assert.match(app,/strokeWaiters\.push\(resolve\)/);
+  assert.match(app,/canApply\(marks,deliveries\)/);
+  assert.match(app,/if\(!force&&!sent\.some\(e=>e\.kind==='transcript'\)\)return/);
+  assert.match(app,/\(!force&&providerFailed\)/);
+  assert.match(app,/if\(timeline\.some\(e=>e\.kind==='transcript'&&e\.mode==='live'\)\)requestApply\(\)/);
+});
+
 test('studio offers a recording/live toggle', () => {
   const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /role="radiogroup"/);
   assert.match(app, /COPY ARTIFACT/);
-  assert.match(app, /if\(operation==='live'\)requestApply\(\)/);
+  assert.match(app, /if\(origin\.operation==='live'&&mode==='website'&&operation==='live'\)requestApply\(\)/);
 });
 
 test('studio has no text instruction entry; mode events remain separate', async () => {
@@ -410,7 +460,7 @@ test('a live move waits for its arrow without consuming a circled source at the 
     {kind:'stroke',mode:'live',t:12000,payload:arrow}];
   assert.equal(awaitingMoveArrow(duringSpeech,[{kind:'move',from:{stroke:'source'},arrow:'arrow'}]),false);
   const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
-  assert.match(app,/if\(!force&&awaitingMoveArrow\(sent,relations\)\)/);
+  assert.match(app,/!relations\.some\(r=>r\.kind==='move'\|\|r\.kind==='link'\)&&awaitingMoveArrow\(sent,relations\)/);
   assert.match(app,/deliver\(mark\)\.then\(requestApply\)/);
   assert.match(app,/onclick=\{\(\) => apply\(true\)\}/);
   assert.match(app,/JSON\.stringify\(\{bundles,relations,current_html:currentHtml\}\)/);
