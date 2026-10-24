@@ -13,6 +13,7 @@
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD, fuse } from './lib/fusion.js';
+  import { consumeApplyStream } from './apply-stream.js';
   import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents, speechOnlyEvents } from './modes.js';
   const DEFAULT_WEBSITE_URL = 'https://www.meetjamie.ai/';
   let feed, prev, eq, boardEl, detailDialog;
@@ -188,6 +189,7 @@
     if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
     busy=true;
     let invoked=false;
+    let originalHtml=null;
     try{
       await markQueue.flush();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
@@ -217,14 +219,20 @@
       if(traceFailed)throw new Error('SESSION TRACE UNAVAILABLE — RELOAD BEFORE SENDING');
       invoked=true;
       const requestId=cryptoId();
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:sessionId,request_id:requestId,bundles,relations,current_html:currentHtml})});
-      const out=await response.json();
+      originalHtml=currentHtml;
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:sessionId,request_id:requestId,bundles,relations,current_html:originalHtml,stream:true})});
+      const out=await consumeApplyStream(response, html=>{
+        if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
+        previewHtml(html);
+        void trace('preview_updated',{source:'agent-partial',request_id:requestId,elapsedMs:elapsed()});
+        status='PREVIEW UPDATED · AGENT STILL WORKING...';
+      });
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
-      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message,state:response.ok?'SENT':'PREPARED / NOT SENT'});
-      if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
+      if(typeof out.agent_message==='string')addLine('coord','SENT · FULL AGENT MESSAGE',{copyText:out.agent_message,state:'SENT'});
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
       interpretationHistory=[...interpretationHistory,...currentInterpretations];
-      previewHtml(out.html);void trace('preview_updated',{source:'agent',request_id:requestId,elapsedMs:elapsed()});timeline=timeline.filter(e=>!sent.includes(e));
+      if(currentHtml!==out.html)previewHtml(out.html);
+      void trace('preview_updated',{source:'agent',request_id:requestId,elapsedMs:elapsed()});timeline=timeline.filter(e=>!sent.includes(e));
       marks=marks.filter(mark=>!sent.some(e=>e.kind==='stroke'&&e.payload.id===mark.id));turns=turns.filter(turn=>!sent.some(e=>e.kind==='transcript'&&e.text===turn.text));
       note=MARGINALIA[applies++%MARGINALIA.length];summonMuse();
       providerFailed=false;
@@ -232,6 +240,11 @@
       if(!timeline.some(e=>e.kind==='transcript'&&e.mode==='live')&&timeline.some(e=>e.kind==='stroke'&&e.mode==='live'))manualAction='sketches';
       if(timeline.some(e=>e.kind==='transcript'&&e.mode==='live'))requestApply();
     }catch(err){if(mode==='website'&&operation==='live'&&modeVersion===runModeVersion){
+      if(invoked&&typeof originalHtml==='string'&&currentHtml!==originalHtml){
+        previewHtml(originalHtml);
+        void trace('preview_updated',{source:'agent-rollback',elapsedMs:elapsed()});
+      }
+      if(typeof err.agentMessage==='string')addLine('coord','PREPARED / NOT SENT · FULL AGENT MESSAGE',{copyText:err.agentMessage,state:'PREPARED / NOT SENT'});
       if(invoked){providerFailed=true;manualAction='retry';}
       addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';
     }}

@@ -27,7 +27,8 @@ test('session rows open the full text on demand, separate from their compact lab
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /copyText:agentMessage/);
   assert.match(app, /copyText:out\.agent_message/);
-  assert.match(app, /state:response\.ok\?'SENT':'PREPARED \/ NOT SENT'/);
+  assert.match(app, /copyText:out\.agent_message,state:'SENT'/);
+  assert.match(app, /copyText:err\.agentMessage,state:'PREPARED \/ NOT SENT'/);
   assert.match(app, /<dialog[^>]*bind:this=\{detailDialog\}/);
   assert.match(app, /onclick=\{\(\) => openDetail\(row\)\}/);
   assert.match(app, /readonly[^>]*value=\{selectedRow\.copyText \?\? selectedRow\.text\}/);
@@ -302,7 +303,9 @@ test('studio exposes URL import in its existing preview', () => {
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /\/api\/import/);
   assert.match(app, /aria-label="Website URL"/);
-  assert.match(app, /previewHtml\(out\.html\)/);
+  assert.match(app, /consumeApplyStream\(response/);
+  assert.match(app, /previewHtml\(html\)/);
+  assert.match(app, /previewHtml\(originalHtml\)/);
 });
 
 test('both studio surfaces draw pen only, without a tool switch', () => {
@@ -502,5 +505,5 @@ test('a live move waits for its arrow without consuming a circled source at the 
   assert.match(app, /manualAction='speech-only'/);
   assert.match(app, /manualAction='sketches'/);
   assert.doesNotMatch(app, />APPLY ▸<\/Button>/);
-  assert.match(app,/JSON\.stringify\(\{session_id:sessionId,request_id:requestId,bundles,relations,current_html:currentHtml\}\)/);
+  assert.match(app,/JSON\.stringify\(\{session_id:sessionId,request_id:requestId,bundles,relations,current_html:originalHtml,stream:true\}\)/);
 });
