@@ -77,6 +77,34 @@ Website URL fields are for importing a page, not typing instructions. Voice and 
 - **Words and marks are compared.** When you say "make it bigger" and circle a box, the agent gets both. When your words and your marks disagree, the reasoning step says so out loud.
 - **Nothing goes live from a meeting.** APPLY updates the preview; the studio has no publish control. A human decides when an idea is ready to leave the room.
 
+## How it was built
+
+The story of the build, in order, because the path is part of the answer.
+
+1. **Research before code.** The morning went to the sponsors' actual APIs: Jamie's meeting data (REST, MCP, webhooks), Reson8's turns endpoint with word-level timestamps, and the Claude API. We picked meeting intelligence as the space because talk and sketch happen together there and every tool captures only one channel.
+
+2. **We explored a character first.** The first concept was AGENT-741, a meeting referee that scores your promises: comedy cards on the surface, an eternal promise ledger underneath. We built a full visual shell for it. It taught us demo craft, and it exposed the real gap: notes without follow-through.
+
+3. **The rules sharpened the target.** The competition brief said judged on technical complexity and creativity, bonus for partner tech, and the 19:00 "opt-in" was actually a submission: a 2-minute video, a detailed explanation, and a public repository with full API documentation.
+
+4. **The pivot.** A teammate's board said it plainly: speak to the agent while drawing on the website. We cut the riskiest part (auto-deploy) and kept the novel part: words and marks on one clock, with the preview as the website and deployment as an explicit human decision.
+
+5. **The spec became the contract.** Transcribe in short, timestamped chunks. Draw on the live website while capturing the HTML elements beneath the marks. Send each chunk with the sketches of its own time window, and never cut a stroke in half. Show the preview fast. Never publish an unfinished idea.
+
+6. **The clock problem.** Message arrival time is not speech time. We found and reproduced a real bug where marks attached to the previous sentence, then placed every utterance at its true audio position using Reson8's per-word timestamps. Everything downstream compares on that clock.
+
+7. **Fusion: words to marks.** "This", "that" and "here" bind to the mark nearest in time (6 seconds before, 2.5 seconds after, because people point slightly before speaking). "Move this here" resolves to two marks. Intent rules separate the subtle cases: "put the headline here" is a move, "put the new chart here" is an add.
+
+8. **The agent reasons, then executes.** One Claude call does both jobs and shows its work: a short reasoning paragraph in the UI (including word-versus-mark conflicts), then the complete updated HTML. The prompt carries a structured timeline with intents, sketch geometry, ranked DOM targets and explicit REFERENCE lines the agent is told to trust. Every mark is registered with the backend and gets a receipt before the agent accepts it.
+
+9. **Prove it by running it.** The repository ships a runnable end-to-end script: generated speech to Reson8 to stroke receipt to Claude reasoning to executed HTML. Running it against the real APIs caught that Reson8's turn_end event is an empty marker and the text lives on turn_end_candidate. Real pipelines find real bugs.
+
+10. **One studio, one team.** The web studio moved to Svelte and grew shape recognition (circles, squares, triangles, line direction and angle), multi-stroke marks and an import-any-URL canvas. An early Chrome extension experiment was removed cleanly, with its shared library (deictic fusion, Reson8 message adapter) kept in the studio. Every change shipped as a reviewed pull request.
+
+11. **The loading screen is real 3D.** Four chrome-glass sponsor logos modeled in Blender (Jamie, Reson8, {Tech: Europe}, Anthropic), exported as glTF, spinning on dark glass tiles. A progress bar that slid backwards was fixed by giving it one monotonic source of truth, and the final invisible-logos bug turned out to be a broken relative import in a vendored loader that silently fell back to plain tiles: proven fixed by executing the module graph.
+
+12. **Where it landed.** A live-verified voice-to-agent chain with real API keys, 57+ tests, a documented public repository, and one demo: speak and draw on a website while it changes.
+
 ## Sponsor tech, and why
 
 | Part | Technology | Why |
