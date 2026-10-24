@@ -404,6 +404,11 @@ test('a live move waits for its arrow without consuming a circled source at the 
     {kind:'stroke',mode:'live',t:19,payload:source},live[1]];
   const priorRelation={kind:'move',from:{stroke:'old'},arrow:'arrow'};
   assert.equal(awaitingMoveArrow(older,[priorRelation]),true);
+  const duringSpeech=[{kind:'stroke',mode:'live',t:9500,payload:oldSource},
+    {kind:'transcript',mode:'live',t:10000,text:'move this'},
+    {kind:'stroke',mode:'live',t:11300,payload:source},
+    {kind:'stroke',mode:'live',t:12000,payload:arrow}];
+  assert.equal(awaitingMoveArrow(duringSpeech,[{kind:'move',from:{stroke:'source'},arrow:'arrow'}]),false);
   const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
   assert.match(app,/if\(!force&&awaitingMoveArrow\(sent,relations\)\)/);
   assert.match(app,/deliver\(mark\)\.then\(requestApply\)/);

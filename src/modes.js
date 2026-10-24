@@ -15,7 +15,8 @@ export function awaitingMoveArrow(events, relations) {
     if (turn.kind !== 'transcript' || classifyIntent(turn.text) !== 'move') return false;
     // A source drawn during recognition can settle after the spoken turn.
     if (!sources.length) return true;
-    const source = sources.reduce((best, e) =>
+    const during = sources.filter(e => e.t >= turn.t && e.t - turn.t <= 5000);
+    const source = (during.length ? during : sources).reduce((best, e) =>
       Math.abs(e.t - turn.t) < Math.abs(best.t - turn.t) ? e : best);
     return !relations.some(r => (r.kind === 'move' || r.kind === 'link') &&
       r.from?.stroke === source.payload.strokes[0].id &&
