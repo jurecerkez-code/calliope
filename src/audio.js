@@ -16,31 +16,31 @@ export function audioWebSocketUrl(location, {audioPath, audioPort}) {
 export function createAudio(canvas, {port, audioPath, onLine, onTurn, onTurnStart, onEvent, elapsed}) {
   const ctx = canvas.getContext('2d');
   let ws=null, audioCtx=null, analyser=null, stream=null, frame=0;
-  let audioStartMs=null, lastCandidate=null; // session time of the first sample Reson8 got
+  let lastCandidate=null, audioStartMs=null;
+  const now = () => (typeof elapsed === 'function' ? elapsed() : Math.round(performance.now()));
   // A rolling amplitude trace, newest on the right, mirrored around a dotted baseline.
   const history=[];
-  const now = () => (typeof elapsed === 'function' ? elapsed() : Math.round(performance.now()));
   function draw() {
     frame=requestAnimationFrame(draw);
-    const W=canvas.clientWidth||200, H=canvas.clientHeight||44, dpr=window.devicePixelRatio||1;
+    const W=canvas.clientWidth||200, H=canvas.clientHeight||28, dpr=globalThis.devicePixelRatio||1;
     if(canvas.width!==Math.round(W*dpr)||canvas.height!==Math.round(H*dpr)){canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);}
-    ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+    ctx.setTransform?.(dpr,0,0,dpr,0,0); ctx.clearRect?.(0,0,W,H);
     const mid=H/2, step=4, bars=Math.floor(W/step);
     let level=0;
-    if(analyser){
+    if(analyser?.getByteTimeDomainData){
       const data=new Uint8Array(analyser.fftSize); analyser.getByteTimeDomainData(data);
       let sum=0; for(const v of data){const d=(v-128)/128;sum+=d*d;}
       level=Math.min(1,Math.sqrt(sum/data.length)*4.5);
     }
     history.push(level); while(history.length>bars) history.shift();
-    ctx.fillStyle='rgba(23,23,23,.28)';
+    ctx.fillStyle='rgba(23,23,23,.22)';
     for(let x=0;x<W;x+=step) ctx.fillRect(x,mid-.5,1.5,1);
     const offset=bars-history.length;
-    history.forEach((v,i)=>{
+    history.forEach((v,k)=>{
       if(v<0.02) return;
-      const h=Math.max(2,v*(H-6));
-      ctx.fillStyle=v>0.35?'#2F5FAE':'rgba(47,95,174,.4)';
-      ctx.fillRect((offset+i)*step,mid-h/2,2,h);
+      const h=Math.max(2,v*(H-4));
+      ctx.fillStyle=v>0.35?'#2F5FAE':'rgba(47,95,174,.45)';
+      ctx.fillRect((offset+k)*step,mid-h/2,2,h);
     });
   }
   draw();

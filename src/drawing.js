@@ -165,8 +165,9 @@ export function attachDrawing(
 		e.preventDefault();
 	});
 	// What the mark most plausibly refers to. Closed shapes: the element at their centre,
-	// scored by the shape recogniser. A pen line is read by where it ends (an arrow
-	// points with its tip). The score is the share of counted points on that element.
+	// scored by the shape recogniser. Any other line is read by where it ends (an arrow
+	// points with its tip), scored by the share of its last points on that element.
+	// Scores are reported as what they are, never as more.
 	function resolveTarget(payload) {
 		const r = overlay.getBoundingClientRect(),
 			b = payload.bbox;

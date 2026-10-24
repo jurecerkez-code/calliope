@@ -5,7 +5,7 @@ import { INK as BRAND_INK, inkOutline } from "./ink.js";
 
 const NS = "http://www.w3.org/2000/svg";
 export const BOARD = { width: 2400, height: 1600 };
-const PAPER = "#FFFFFF";
+const PAPER = "#FFFDF9";
 
 function el(tag, attrs = {}, text) {
 	const node = document.createElementNS(NS, tag);
@@ -13,6 +13,7 @@ function el(tag, attrs = {}, text) {
 	if (text != null) node.textContent = text;
 	return node;
 }
+// strokes are filled ink outlines (see ink.js), so the PNG export keeps the hand's wobble
 const render = (s) => s.path.setAttribute("d", inkOutline(s.points));
 
 export function attachBoard(svg, { elapsed, onStroke }) {
