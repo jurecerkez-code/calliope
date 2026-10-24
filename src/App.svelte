@@ -54,11 +54,11 @@
     });
     return {marks:history.marks,turns};
   });
-  // The latest sentence and the mark it points at, as four plain steps.
-  const said = $derived(lanes.turns.at(-1) || null);
-  const pointedRef = $derived(said?.references.find(r=>r.strokeId) || null);
-  const pointed = $derived(pointedRef ? history.marks.find(m=>m.id===pointedRef.strokeId) : history.marks.at(-1) || null);
-  const target = $derived(pointed?.target?.selector ? pointed.target : null);
+  // Every sentence of the session, newest first, with the mark its pointing word bound to.
+  const sentences = $derived(lanes.turns.map(t=>{
+    const ref=t.references.find(r=>r.strokeId)||null, mark=ref?history.marks.find(m=>m.id===ref.strokeId):null;
+    return {...t,ref,mark,target:mark?.target?.selector?mark.target:null};
+  }).reverse());
 
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
   function addLine(cls,text,options={}){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed()),...options}];scroll();}
@@ -454,51 +454,30 @@
 
 {#if mode!=='start'}
   <aside class="panel">
-    <h2 class="panel-title">Interpretation</h2>
     <div class="pane">
       {#if mode==='website'}
-        <ol class="steps">
-          <li class:done={said}>
-            <span class="n">1</span><h3>The user said</h3>
-            <div class="card">
-              {#if said}
-                <div class="said"><svg class="voice-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4M9 7v10M13 4v16M17 8v8M21 11v2" /></svg><q>{said.text}</q><time>{clock(said.startMs)}</time></div>
-                <dl class="kv"><dt>intent:</dt><dd>{said.intent}</dd>{#if pointedRef}<dt>{pointedRef.word ? `"${pointedRef.word}"` : 'nearest'}:</dt><dd>{pointed?.name}</dd>{/if}</dl>
-              {:else}<p class="wait">Waiting for a sentence. Tap the mic and talk while you draw.</p>{/if}
-            </div>
-          </li>
-          <li class:done={pointed}>
-            <span class="n">2</span><h3>The user pointed</h3>
-            <div class="card pointed">
-              {#if pointed}
-                {@const b = pointed.bbox}
-                <svg class="thumb" viewBox="{b.x - 16} {b.y - 16} {b.width + 32} {b.height + 32}" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><polyline points={pointed.pts.map(p => p.x + ',' + p.y).join(' ')} /></svg>
-                <dl class="kv"><dt>{pointed.name}</dt><dd>({pointed.shape})</dd><dt>bbox:</dt><dd>{b.width} × {b.height}</dd></dl>
-              {:else}<p class="wait">Circle, underline or point at something on the page.</p>{/if}
-            </div>
-          </li>
-          <li class:done={target}>
-            <span class="n">3</span><h3>Target resolved</h3>
-            <div class="card">
-              {#if target}
-                <dl class="kv"><dt>selector:</dt><dd>{target.selector}</dd><dt>tag:</dt><dd>{(target.tag || '—').toUpperCase()}</dd><dt>{target.basis==='shape' ? 'shape:' : 'tip:'}</dt><dd>{target.confidence.toFixed(2)}</dd></dl>
-              {:else if pointed}<p class="wait">The mark didn't land on an element. Circle a little closer.</p>
-              {:else}<p class="wait">Words and marks meet here, by time.</p>{/if}
-            </div>
-          </li>
-          <li class:done={lastAgent || (said && target)}>
-            <span class="n">4</span><h3>Action</h3>
-            <div class="card">
-              {#if said && target}<span class="pill">{said.intent.toUpperCase()}</span>{/if}
-              {#if lastAgent}<p class="agent">{lastAgent}</p>
-              {:else if operation==='live'}<p class="wait">Each finished sentence updates the preview by itself.</p>
-              {:else}<p class="wait">Recording only. Nothing is sent to the agent.</p>{/if}
-            </div>
-          </li>
-        </ol>
         <section class="block">
           <h2>Timeline</h2>
           <Timeline marks={lanes.marks} utterances={lanes.turns} {now} {fmt} />
+        </section>
+        <section class="interp">
+          <h2>Interpretation</h2>
+          <ol class="feed">
+            {#each sentences.slice(0, 8) as row, i (row.id)}
+              <li class:latest={i===0}>
+                <div class="feed-said"><q>{row.text}</q><time>{clock(row.startMs)}</time></div>
+                <div class="feed-meta">
+                  {#if row.mark}<svg class="mini" viewBox="{row.mark.bbox.x - 12} {row.mark.bbox.y - 12} {row.mark.bbox.width + 24} {row.mark.bbox.height + 24}" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><polyline points={row.mark.pts.map(p => p.x + ',' + p.y).join(' ')} /></svg>{/if}
+                  <span class="pill">{row.intent}</span>
+                  {#if row.mark}<span class="ref">{row.ref.word ? `"${row.ref.word}"` : 'nearest'} → {row.mark.name}</span>{/if}
+                  {#if row.target}<code>{row.target.selector}</code>{:else if row.mark}<span class="miss">no element under the mark</span>{/if}
+                </div>
+                {#if i===0 && lastAgent}<p class="agent"><b>Agent</b> {lastAgent}</p>{/if}
+              </li>
+            {:else}
+              <li class="wait">Tap the mic, circle something, and say what should change. Each sentence lands here with what it pointed at.</li>
+            {/each}
+          </ol>
         </section>
         {#if operation==='recording'}
           <div class="actions"><Button id="btnCopy" variant="primary" onclick={copyArtifact}><span class="sc">COPY ARTIFACT</span></Button></div>
