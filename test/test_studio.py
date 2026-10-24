@@ -317,6 +317,29 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(body['messages'], [{'role': 'user', 'content': 'change it'}])
         self.assertEqual(result, {'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'})
 
+    def test_agent_can_return_updated_html_without_reasoning(self):
+        prompt = server.build_agent_prompt(
+            [{'transcript': 'Make the heading green', 'strokes': []}],
+            '<html><h1>Old</h1></html>')
+        self.assertNotIn('REASON FIRST', prompt)
+        self.assertNotIn('"reasoning"', prompt)
+        self.assertIn('"html"', prompt)
+        answer = {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
+            'html': '<html><h1>Green</h1></html>'})}}]}
+        # Initialize urllib's process-wide opener before mocking its factory.
+        with urlopen(self.url + '/api/config') as response:
+            self.assertEqual(response.status, 200)
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(answer).encode()
+            result = server.lyceum_apply(
+                [{'transcript': 'Make the heading green', 'strokes': []}],
+                '<html><h1>Old</h1></html>', prompt=prompt)
+            sent = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
+        self.assertEqual(result['html'], '<html><h1>Green</h1></html>')
+        self.assertEqual(result['reasoning'], '')
+        self.assertEqual(sent, prompt)
+
     def test_empty_model_content_does_not_report_successful_apply(self):
         reply = {'choices': [{'finish_reason': 'stop', 'message': {
             'content': '', 'reasoning_content': 'I worked on the page but gave no final answer'
