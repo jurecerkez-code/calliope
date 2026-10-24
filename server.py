@@ -45,6 +45,7 @@ HTTP_PORT = int(os.environ.get('HTTP_PORT', '8800'))
 AUDIO_PORT = int(os.environ.get('AUDIO_PORT', '8801'))
 STROKES = {}
 STROKES_LOCK = threading.Lock()
+MARKS = {}
 
 def valid_stroke(s):
     if not isinstance(s, dict) or not isinstance(s.get('id'), str) or not re.fullmatch(r'[\w-]{1,80}', s['id']):
@@ -82,6 +83,20 @@ def valid_stroke(s):
             'height': max(p['y'] for p in pts) - min(p['y'] for p in pts)}
     return s.get('bbox') == bbox
 
+def valid_mark(mark):
+    if not isinstance(mark, dict) or not isinstance(mark.get('strokes'), list) or not 1 <= len(mark['strokes']) <= 2:
+        return False
+    strokes = mark['strokes']
+    if not all(valid_stroke(s) for s in strokes) or len({s['id'] for s in strokes}) != len(strokes):
+        return False
+    if mark.get('id') != strokes[0]['id'] or mark.get('t') != strokes[0].get('t') or mark.get('t_end') != strokes[-1].get('t_end'):
+        return False
+    if len(strokes) == 1:
+        return mark.get('shape') == strokes[0].get('shape') and mark.get('enclosed_element') == strokes[0].get('enclosed_element')
+    return (mark.get('shape') == 'x' and mark.get('enclosed_element') == ''
+            and all(s['tool'] == 'pen' for s in strokes)
+            and strokes[0]['viewBox'] == strokes[1]['viewBox'])
+
 
 # ---------- Anthropic: REASON about the turn, then EXECUTE the website change ----------
 def claude_apply(bundles: list, current_html: str) -> dict:
@@ -91,6 +106,16 @@ def claude_apply(bundles: list, current_html: str) -> dict:
     for b in bundles:
         timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}")
         for s in b.get("strokes", []):
+            if isinstance(s.get('strokes'), list):
+                paths = s['strokes']
+                if len(paths) > 1:
+                    timeline_desc.append(
+                        f"[{s.get('t', 0)}-{s.get('t_end', 0)}ms] X (tentative) made of "
+                        f"{len(paths)} original paths, not separate commands. "
+                        f"Stroke JSON: {json.dumps(paths, separators=(',', ':'))}. "
+                        "Shape is an estimate, not the user's intent.")
+                    continue
+                s = paths[0]
             pts = s.get("pts", [])
             bounds = "unknown"
             if pts:
@@ -254,14 +279,28 @@ class Handler(BaseHTTPRequestHandler):
             with STROKES_LOCK:
                 stroke = STROKES.get(payload.get('id'))
             self._send(200, {'stroke': stroke}) if stroke else self._send(404, {'error': 'not found'})
+        elif self.path == '/api/marks':
+            if not valid_mark(payload):
+                return self._send(400, {'error': 'invalid mark'})
+            with STROKES_LOCK:
+                if len(MARKS) >= 500 and payload['id'] not in MARKS:
+                    return self._send(507, {'error': 'mark store full'})
+                if payload['id'] in MARKS and MARKS[payload['id']] != payload:
+                    return self._send(409, {'error': 'id conflict'})
+                MARKS[payload['id']] = payload
+            self._send(201, {'id': payload['id'], 'status': 'accepted'})
+        elif self.path == '/api/marks/readback':
+            with STROKES_LOCK:
+                mark = MARKS.get(payload.get('id'))
+            self._send(200, {'mark': mark}) if mark else self._send(404, {'error': 'not found'})
         elif self.path == "/api/apply":
             try:
                 if not ANTHROPIC_KEY:
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured'})
                 strokes = [s for b in payload.get('bundles', []) for s in b.get('strokes', [])]
                 with STROKES_LOCK:
-                    if any(STROKES.get(s.get('id')) != s for s in strokes):
-                        return self._send(409, {'error': 'stroke not accepted by backend; retry delivery'})
+                    if any((MARKS if isinstance(s.get('strokes'), list) else STROKES).get(s.get('id')) != s for s in strokes):
+                        return self._send(409, {'error': 'mark not accepted by backend; retry delivery'})
                 out = claude_apply(payload.get("bundles", []), payload.get("current_html", ""))
                 self._send(200, out)
             except Exception as e:  # surface the error to the UI, never crash the demo

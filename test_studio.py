@@ -13,6 +13,9 @@ import server
 
 class StudioTest(unittest.TestCase):
     def setUp(self):
+        with server.STROKES_LOCK:
+            server.STROKES.clear()
+            server.MARKS.clear()
         self.http = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
         self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
         self.thread.start()
@@ -67,6 +70,51 @@ class StudioTest(unittest.TestCase):
         self.assertIn('Circle drawn at 2026-10-24T12:00:00Z', prompt)
         self.assertIn('around h1 "Draw together"', prompt)
         self.assertNotIn('SKETCH on:', prompt)
+
+    def test_grouped_x_receipt_and_agent_gate(self):
+        first = self.stroke()
+        second = {**self.stroke(), 'id': 'crossing-second', 't': 21, 't_end': 35}
+        mark = {'id': first['id'], 'shape': 'x', 't': 10, 't_end': 35,
+                'enclosed_element': '', 'strokes': [first, second]}
+        bundle = {'t_start': 10, 't_end': 35, 'transcript': 'remove this', 'strokes': [mark]}
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply') as agent:
+            code, _ = self.post('/api/apply', {'bundles': [bundle], 'current_html': '<html></html>'})
+            self.assertEqual(code, 409)
+            agent.assert_not_called()
+            code, _ = self.post('/api/strokes', first)
+            self.assertEqual(code, 201)
+            code, _ = self.post('/api/apply', {'bundles': [bundle], 'current_html': '<html></html>'})
+            self.assertEqual(code, 409)
+            agent.assert_not_called()
+            code, receipt = self.post('/api/marks', mark)
+            self.assertEqual(code, 201)
+            self.assertEqual(receipt['id'], mark['id'])
+            code, readback = self.post('/api/marks/readback', {'id': mark['id']})
+            self.assertEqual(code, 200)
+            self.assertEqual(readback['mark'], mark)
+            agent.return_value = {'html': '<html></html>', 'reasoning': 'ok'}
+            code, _ = self.post('/api/apply', {'bundles': [bundle], 'current_html': '<html></html>'})
+            self.assertEqual(code, 200)
+            agent.assert_called_once()
+        with patch.object(server.urllib.request, 'urlopen') as request:
+            request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
+            server.claude_apply([bundle], '<html></html>')
+            prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
+        self.assertIn('X', prompt)
+        self.assertIn(first['path'], prompt)
+        self.assertIn(second['path'], prompt)
+
+    def test_invalid_group_cannot_be_accepted_or_applied(self):
+        first = self.stroke()
+        second = {**self.stroke(), 'id': 'other', 'pts': [{**self.stroke()['pts'][0], 'x': float('inf')}]}
+        mark = {'id': first['id'], 'shape': 'x', 't': 10, 't_end': 20,
+                'enclosed_element': '', 'strokes': [first, second]}
+        code, _ = self.post('/api/marks', mark)
+        self.assertEqual(code, 400)
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply') as agent:
+            code, _ = self.post('/api/apply', {'bundles': [{'strokes': [mark]}], 'current_html': '<html></html>'})
+            self.assertEqual(code, 409)
+            agent.assert_not_called()
 
     def test_built_studio_and_original_loader_available(self):
         with urlopen(self.url + '/') as response:

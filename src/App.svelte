@@ -5,6 +5,7 @@
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
   import { buildBundles, canApply } from './timeline.js';
+  import { createMarkQueue } from './marks.js';
   import { createAudio } from './audio.js';
   let feed, prev, eq;
   let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
@@ -12,25 +13,32 @@
   let secure = $state(false);
   const started = Date.now();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
-  let timeline = [], deliveries = {}, drawing = null, audio = null;
+  let timeline = [], deliveries = {}, drawing = null, audio = null, activeStroke = false;
   const elapsed = () => Date.now()-started;
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
   function addLine(cls,text){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed())}];scroll();}
   function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
   function scroll(){requestAnimationFrame(()=>{if(feed)feed.scrollTop=feed.scrollHeight;});}
   function rowText(stroke,state){const p=stroke.pts.at(-1);return `${stroke.summary?.text || stroke.tool.toUpperCase()+' '+p.x+', '+p.y+' · '+p.utc} · ${state}`;}
-  function updateRow(stroke,state){rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,state)}:row);scroll();}
-  async function deliver(stroke){
-    if(deliveries[stroke.id]==='sending'||deliveries[stroke.id]==='accepted')return;
-    deliveries[stroke.id]='sending';updateRow(stroke,'SENDING');
+  function updateRow(mark,state){rows=rows.map(row=>row.key===mark.id?{...row,text:`${mark.shape.toUpperCase()} · ${mark.strokes.length} PATH${mark.strokes.length===1?'':'S'} · ${state}`} :row);scroll();}
+  async function deliver(mark){
+    if(deliveries[mark.id]==='sending'||deliveries[mark.id]==='accepted')return;
+    deliveries[mark.id]='sending';updateRow(mark,'SENDING');
     try {
-      const response=await fetch('/api/strokes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(stroke.payload)});
+      const response=await fetch('/api/marks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(mark)});
       const ack=await response.json();
-      if(!response.ok||ack.status!=='accepted'||ack.id!==stroke.id)throw new Error(ack.error||'invalid receipt');
-      deliveries[stroke.id]='accepted';updateRow(stroke,'ACCEPTED');
-    }catch(err){deliveries[stroke.id]='failed';updateRow(stroke,'FAILED — CLICK TO RETRY');addLine('err','STROKE NOT DELIVERED: '+err.message);}
+      if(!response.ok||ack.status!=='accepted'||ack.id!==mark.id)throw new Error(ack.error||'invalid receipt');
+      deliveries[mark.id]='accepted';updateRow(mark,'ACCEPTED');
+    }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
   }
-  function retry(row){if(row.stroke && deliveries[row.stroke.id]==='failed')deliver(row.stroke);}
+  function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
+  const markQueue=createMarkQueue({onSettled:mark=>{
+    timeline.push({kind:'stroke',t:mark.t,t_end:mark.t_end,payload:mark});
+    rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
+      .map(row=>row.key===mark.id?{...row,mark}:row);
+    updateRow(mark,'SENDING');
+    return deliver(mark);
+  }});
   function previewHtml(html){
     currentHtml=html;
     // CSP is applied before the untrusted document; no script permission in the iframe sandbox.
@@ -38,12 +46,13 @@
   }
   function previewLoaded(){drawing=attachDrawing(prev,{
     tool:()=>tool,elapsed,
-    onStart:stroke=>{rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
-    onMove:stroke=>updateRow(stroke,'DRAWING'),
+    onStart:stroke=>{markQueue.hold();activeStroke=true;rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
+    onMove:stroke=>{rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,'DRAWING')}:row);scroll();},
     onFinish:(stroke,payload,summary)=>{
       stroke.payload=payload;stroke.summary=summary;
-      timeline.push({kind:'stroke',t:stroke.t,t_end:payload.t_end,payload});
-      deliver(stroke);
+      activeStroke=false;
+      rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,'PENDING RECOGNITION')}:row);
+      markQueue.add(payload);
     }
   });}
   function clearMarks(){drawing?.clear();addLine('fin','MARKS CLEARED');}
@@ -52,12 +61,16 @@
     try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
   }
   async function apply(){
-    const bundles=buildBundles(timeline), strokes=timeline.filter(e=>e.kind==='stroke').map(e=>e.payload);
-    if(!typed && !bundles.length){addLine('err','NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.');return;}
-    if(!canApply(strokes,deliveries)){addLine('err','RETRY FAILED STROKES BEFORE APPLY');return;}
-    status='ANTHROPIC IS REASONING...';busy=true;
+    if(busy)return;
+    if(activeStroke){addLine('err','FINISH DRAWING BEFORE APPLY');return;}
+    busy=true;
     try{
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,current_html:currentHtml})});
+      await markQueue.flush();
+      const bundles=buildBundles(timeline), marks=timeline.filter(e=>e.kind==='stroke').map(e=>e.payload);
+      if(!typed && !bundles.length){addLine('err','NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.');return;}
+      if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
+      status='ANTHROPIC IS REASONING...';
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes:marks}]:bundles,current_html:currentHtml})});
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
