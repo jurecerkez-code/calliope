@@ -184,7 +184,7 @@ class StudioTest(unittest.TestCase):
     def test_incomplete_agent_answer_retains_raw_response_for_diagnosis(self):
         session = 'f' * 32
         reply = {'choices': [{'finish_reason': 'length', 'message': {'content': '<html>cut off'}}]}
-        def incomplete(bundles, html, prompt, on_response):
+        def incomplete(bundles, html, prompt, on_response, on_miss):
             on_response(reply)
             raise server.ProviderAnswerError('Lyceum returned no complete HTML answer')
         with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
@@ -210,7 +210,7 @@ class StudioTest(unittest.TestCase):
                  patch.object(server, 'ANTHROPIC_KEY', 'test-only'), \
                  patch.object(server, 'OPENROUTER_KEY', 'test-only'):
                 attempts = []
-                def flaky(bundles, html, prompt, on_response):
+                def flaky(bundles, html, prompt, on_response, on_miss):
                     attempts.append((bundles, html, prompt))
                     if len(attempts) < 3:
                         on_response({'error': 'temporary provider failure'})
@@ -743,6 +743,218 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(events[1]['html'], events[0]['html'])
         self.assertEqual(opener.return_value.open.call_args_list[0].args[0].full_url,
                          'https://openrouter.ai/api/v1/chat/completions')
+
+    def test_stream_missing_batch_has_no_edit_then_corrected_done(self):
+        original = '<html><h1>Old</h1></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply('absent'), tool_reply(call_id='edit-2'), stop_reply()]
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual([e['type'] for e in events], ['edit', 'done'])
+        self.assertEqual(events[0]['html'], original.replace('Old', 'Updated'))
+        self.assertEqual(events[1]['html'], events[0]['html'])
+        self.assertEqual(opener.return_value.open.call_count, 3)
+        followup = json.loads(opener.return_value.open.call_args_list[1].args[0].data)
+        self.assertIn('no edits applied', followup['messages'][-1]['content'])
+
+    def test_stream_prior_preview_remains_during_correction_then_error_rolls_back(self):
+        original = '<html><h1>Old</h1></html>'
+        seen = []
+        original_emit = server.Handler._stream_event
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener, \
+             patch.object(server.Handler, '_stream_event', autospec=True) as emit:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), tool_reply('absent', call_id='edit-2'), stop_reply()]
+            def recorded(handler, kind, **data):
+                seen.append(kind)
+                original_emit(handler, kind, **data)
+            emit.side_effect = recorded
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual(seen, ['edit', 'error'])
+        self.assertEqual(events[0]['html'], original.replace('Old', 'Updated'))
+        self.assertNotIn('html', events[1])
+        self.assertEqual(opener.return_value.open.call_count, 3)
+
+    def test_stream_late_correction_completes_with_last_preview(self):
+        original = '<html><h1>Old</h1></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), tool_reply('absent', call_id='edit-2'),
+                tool_reply('Updated', 'Final', call_id='edit-3'), stop_reply()]
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual([e['type'] for e in events], ['edit', 'edit', 'done'])
+        self.assertEqual(events[-1]['html'], original.replace('Old', 'Final'))
+        self.assertEqual(events[-1]['html'], events[-2]['html'])
+        self.assertEqual(opener.return_value.open.call_count, 4)
+
+    def test_nonstream_two_requests_discard_partial_batch(self):
+        original = '<html><h1>Old</h1><p>Keep</p></html>'
+        first = json.loads(tool_reply())['choices'][0]['message']['tool_calls'][0]
+        missing = json.loads(tool_reply('absent', call_id='edit-2'))['choices'][0]['message']['tool_calls'][0]
+        batch = json.dumps({'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'content': '', 'tool_calls': [first, missing]}}]}).encode()
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), stop_reply(), batch,
+                tool_reply('<h1>Updated</h1>', '<h1>Final</h1>', call_id='edit-3'), stop_reply()]
+            code, first_result = self.post('/api/apply', {'bundles': [], 'current_html': original})
+            self.assertEqual(code, 200, first_result)
+            code, second_result = self.post('/api/apply', {'bundles': [], 'current_html': first_result['html']})
+        self.assertEqual(code, 200, second_result)
+        self.assertEqual(second_result['html'], original.replace('Old', 'Final'))
+        self.assertEqual(opener.return_value.open.call_count, 5)
+
+    def test_stream_exhausted_miss_terminal_but_provider_failure_retries(self):
+        original = '<html><h1>Old</h1></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = cycle([
+                tool_reply('absent'), tool_reply('still absent', call_id='edit-2')])
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual([e['type'] for e in events], ['error'])
+        self.assertNotIn('html', events[-1])
+        self.assertEqual(opener.return_value.open.call_count, 2)
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                b'{"choices":[]}', tool_reply(), stop_reply()]
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual([e['type'] for e in events], ['edit', 'done'])
+        self.assertEqual(opener.return_value.open.call_count, 3)
+
+    def test_stream_fourth_round_is_completion_only(self):
+        original = '<html><h1>Old</h1></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = cycle([
+                tool_reply(), tool_reply('absent', call_id='edit-2'),
+                tool_reply('Updated', 'Final', call_id='edit-3'),
+                tool_reply('Final', 'Over', call_id='edit-4')])
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual([e['type'] for e in events], ['edit', 'edit', 'error'])
+        self.assertNotIn('html', events[-1])
+        self.assertEqual(opener.return_value.open.call_count, 4)
+
+    def test_unsafe_and_ambiguous_batches_are_terminal_without_edit_events(self):
+        original = '<html><h1>Old</h1><p>Old</p></html>'
+        for unsafe in ('ambiguous', 'wrong_path'):
+            for order in ('unsafe_first', 'missing_first'):
+                with self.subTest(unsafe=unsafe, order=order):
+                    bad = json.loads(tool_reply('Old',
+                        path='index.html' if unsafe == 'ambiguous' else '../server.py',
+                        call_id='bad'))['choices'][0]['message']['tool_calls'][0]
+                    missing = json.loads(tool_reply('absent', call_id='missing'))['choices'][0]['message']['tool_calls'][0]
+                    calls = [bad, missing] if order == 'unsafe_first' else [missing, bad]
+                    batch = json.dumps({'choices': [{'finish_reason': 'tool_calls',
+                        'message': {'content': '', 'tool_calls': calls}}]}).encode()
+                    with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+                         patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+                         patch.object(server.urllib.request, 'build_opener') as opener:
+                        opener.return_value.open.return_value.__enter__.return_value.read.return_value = batch
+                        code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+                    self.assertEqual(code, 200)
+                    self.assertEqual([event['type'] for event in events], ['error'])
+                    self.assertNotIn('html', events[0])
+                    self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_provider_failure_after_safe_miss_never_starts_outer_retry(self):
+        original = '<html><h1>Old</h1></html>'
+        for prior_edit in (False, True):
+            for malformed in (b'not-json', b'{"choices":[]}'):
+                with self.subTest(prior_edit=prior_edit, malformed=malformed):
+                    replies = ([tool_reply()] if prior_edit else []) + [
+                        tool_reply('absent', call_id='edit-2' if prior_edit else 'edit-1'), malformed]
+                    with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+                         patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+                         patch.object(server.urllib.request, 'build_opener') as opener:
+                        opener.return_value.open.return_value.__enter__.return_value.read.side_effect = replies
+                        code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+                    self.assertEqual(code, 200)
+                    self.assertEqual([event['type'] for event in events],
+                        ['edit', 'error'] if prior_edit else ['error'])
+                    self.assertNotIn('html', events[-1])
+                    if prior_edit:
+                        self.assertEqual(events[0]['html'], original.replace('Old', 'Updated'))
+                    self.assertEqual(opener.return_value.open.call_count, len(replies))
+
+    def test_failure_after_corrected_miss_discards_preview_and_does_not_retry(self):
+        original = '<html><h1>Old</h1></html>'
+        replies = [tool_reply(), tool_reply('absent', call_id='edit-2'),
+                   tool_reply('Updated', 'Final', call_id='edit-3'), b'not-json']
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = replies
+            code, _, events = self.post_stream({'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200)
+        self.assertEqual([event['type'] for event in events], ['edit', 'edit', 'error'])
+        self.assertNotIn('html', events[-1])
+        self.assertEqual(opener.return_value.open.call_count, 4)
+
+    def test_nonstream_miss_then_bad_provider_answer_has_no_partial_success(self):
+        original = '<html><h1>Old</h1></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), tool_reply('absent', call_id='edit-2'), b'not-json']
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': original})
+        self.assertEqual(code, 502)
+        self.assertNotIn('html', result)
+        self.assertEqual(opener.return_value.open.call_count, 3)
+
+    def test_openrouter_correction_preserves_opaque_reasoning(self):
+        first = json.loads(tool_reply('absent'))
+        first['choices'][0]['message'].update(reasoning='opaque',
+            reasoning_details=[{'type': 'opaque', 'data': 'token'}])
+        with patch.object(server, 'AGENT_PROVIDER', 'openrouter'), \
+             patch.object(server, 'OPENROUTER_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                json.dumps(first).encode(), tool_reply(call_id='edit-2'), stop_reply()]
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': '<html><h1>Old</h1></html>'})
+        self.assertEqual(code, 200, result)
+        followup = json.loads(opener.return_value.open.call_args_list[1].args[0].data)
+        self.assertEqual(followup['messages'][-2]['reasoning'], 'opaque')
+        self.assertEqual(followup['messages'][-2]['reasoning_details'],
+                         [{'type': 'opaque', 'data': 'token'}])
+
+    def test_claude_missing_span_uses_native_tool_result(self):
+        def block(old, ident):
+            return {'type': 'tool_use', 'id': ident, 'name': 'edit', 'input': {
+                'path': 'index.html', 'edits': [{'oldText': old, 'newText': '<h1>Updated</h1>'}]}}
+        first = block('absent', 'edit-1')
+        replies = [{'stop_reason': 'tool_use', 'content': [first]},
+                   {'stop_reason': 'tool_use', 'content': [block('<h1>Old</h1>', 'edit-2')]},
+                   {'stop_reason': 'end_turn', 'content': []}]
+        with patch.object(server, 'AGENT_PROVIDER', 'claude'), \
+             patch.object(server, 'ANTHROPIC_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                json.dumps(reply).encode() for reply in replies]
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': '<html><h1>Old</h1></html>'})
+        self.assertEqual(code, 200, result)
+        followup = json.loads(opener.return_value.open.call_args_list[1].args[0].data)
+        self.assertEqual(followup['messages'][1]['content'], [first])
+        receipt = followup['messages'][2]['content'][0]
+        self.assertEqual((receipt['type'], receipt['tool_use_id']), ('tool_result', 'edit-1'))
+        self.assertNotIn('absent', receipt['content'])
 
     def test_claude_uses_pi_tool_when_selected(self):
         original = '<html><body><h1>Old</h1></body></html>'

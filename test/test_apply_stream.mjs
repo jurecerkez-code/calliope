@@ -31,6 +31,26 @@ test('a later failure rejects after previewing an edit, so caller can roll back'
   assert.deepEqual(edits, ['<html>partial</html>']);
 });
 
+test('preview remains visible during correction; later error rejects for rollback', async () => {
+  let stream;
+  const response = new Response(new ReadableStream({start(controller) { stream = controller; }}),
+    {headers: {'content-type': 'application/x-ndjson'}});
+  const original = '<html>original</html>';
+  let visible = original;
+  const completion = consumeApplyStream(response, html => { visible = html; })
+    .catch(error => { visible = original; throw error; });
+  stream.enqueue(new TextEncoder().encode(line({type:'edit', html:'<html>preview</html>'})));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(visible, '<html>preview</html>');
+  // No edit event accompanies a rejected batch while the provider corrects it.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(visible, '<html>preview</html>');
+  stream.enqueue(new TextEncoder().encode(line({type:'error', error:'correction exhausted'})));
+  stream.close();
+  await assert.rejects(completion, /correction exhausted/);
+  assert.equal(visible, original);
+});
+
 test('a truncated stream is not a completed edit and rejects', async () => {
   await assert.rejects(consumeApplyStream(reply([line({type:'edit', html:'<html>partial</html>'})]), () => {}), /incomplete/i);
 });

@@ -32,8 +32,7 @@ export async function adapt(request) {
     fail('Invalid document');
   if (!Array.isArray(request.calls) || !request.calls.length || request.calls.length > 8 ||
       bytes(JSON.stringify(request.calls)) > 32_768) fail('Invalid edit batch');
-  const results = [];
-  for (const call of request.calls) {
+  const validated = request.calls.map(call => {
     if (call?.type !== 'function' || call.function?.name !== tool.name ||
         typeof call.id !== 'string' || !call.id || call.id.length > 200 ||
         typeof call.function.arguments !== 'string') fail('Invalid edit call');
@@ -42,23 +41,46 @@ export async function adapt(request) {
       fail('Only index.html is available');
     if (!Array.isArray(args.edits) || !args.edits.length || args.edits.length > 16)
       fail('Invalid replacements');
-    const spans = args.edits.map(edit => {
+    for (const edit of args.edits) {
       if (!edit || Object.keys(edit).some(k => !['oldText', 'newText'].includes(k)) ||
           typeof edit.oldText !== 'string' || !edit.oldText || typeof edit.newText !== 'string' ||
           bytes(edit.oldText) + bytes(edit.newText) > 16_384) fail('Invalid replacement size');
-      const start = current.indexOf(edit.oldText);
-      if (start < 0) fail('Exact span missing');
-      if (current.indexOf(edit.oldText, start + 1) >= 0) fail('Exact span ambiguous');
-      return { start, end: start + edit.oldText.length, text: edit.newText };
-    }).sort((a, b) => a.start - b.start);
+    }
+    return { call, args };
+  });
+  // Simulate the entire batch before executing Pi. A miss must not hide a
+  // later ambiguous span, unsafe call, overlap, or oversized document.
+  let preview = current;
+  let missing = false;
+  const planned = [];
+  for (const { call, args } of validated) {
+    const spans = [];
+    for (const edit of args.edits) {
+      const start = preview.indexOf(edit.oldText);
+      if (start < 0) {
+        missing = true;
+        continue;
+      }
+      if (preview.indexOf(edit.oldText, start + 1) >= 0) fail('Exact span ambiguous');
+      spans.push({ start, end: start + edit.oldText.length, text: edit.newText });
+    }
+    spans.sort((a, b) => a.start - b.start);
     for (let i = 1; i < spans.length; i++) {
       if (spans[i].start < spans[i - 1].end) fail('Overlapping edit spans');
     }
-    expected = current;
+    expected = preview;
     for (const span of spans.toReversed()) {
       expected = expected.slice(0, span.start) + span.text + expected.slice(span.end);
     }
     if (bytes(expected) > MAX_HTML_BYTES) fail('Document too large');
+    planned.push({ call, args, expected });
+    preview = expected;
+  }
+  if (missing) fail('Exact span missing');
+  const results = [];
+  for (const plan of planned) {
+    const { call, args } = plan;
+    expected = plan.expected;
     await tool.execute(call.id, args);
     if (current !== expected) fail('Pi edit did not complete');
     // Do not send Pi's potentially large diff or the document back to the model.
@@ -77,9 +99,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       chunks.push(chunk);
     }
     process.stdout.write(JSON.stringify(await adapt(JSON.parse(Buffer.concat(chunks).toString('utf8')))));
-  } catch {
+  } catch (error) {
     // Never echo page text, tool arguments, or Pi diagnostics to the HTTP client.
-    process.stdout.write(JSON.stringify({ error: 'Pi rejected the edit batch' }));
-    process.exitCode = 1;
+    if (error?.message === 'Exact span missing') {
+      process.stdout.write(JSON.stringify({ retryable_error: 'exact_span_missing' }));
+    } else {
+      process.stdout.write(JSON.stringify({ error: 'Pi rejected the edit batch' }));
+      process.exitCode = 1;
+    }
   }
 }
