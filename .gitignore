@@ -1,0 +1,4 @@
+.env
+staging/
+__pycache__/
+.venv/
