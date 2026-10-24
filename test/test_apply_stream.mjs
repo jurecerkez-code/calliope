@@ -59,3 +59,10 @@ test('non-stream errors retain their normal HTTP reason', async () => {
   await assert.rejects(consumeApplyStream(reply([JSON.stringify({error:'key unavailable'})],
     {status:503, contentType:'application/json'}), () => {}), /key unavailable/);
 });
+
+test('expired receipt error retains HTTP status for safe redelivery', async () => {
+  await assert.rejects(consumeApplyStream(reply([
+    JSON.stringify({error:'mark not accepted by backend; retry delivery'})
+  ], {status:409, contentType:'application/json'}), () => {}), error =>
+    error.status === 409 && /retry delivery/.test(error.message));
+});

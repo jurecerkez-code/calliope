@@ -14,7 +14,7 @@
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD, fuse } from './lib/fusion.js';
   import { consumeApplyStream } from './apply-stream.js';
-  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents, speechOnlyEvents } from './modes.js';
+  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents, speechOnlyEvents, restoreReceipts } from './modes.js';
   const DEFAULT_WEBSITE_URL = 'https://www.meetjamie.ai/';
   let feed, prev, eq, boardEl, detailDialog;
   let handCursor = 'crosshair', now = $state(0), page = $state('preview');
@@ -28,7 +28,7 @@
   let manualAction = $state('');
   let rows = $state([]), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
   let imported = $state(false);
-  let secure = $state(false), publishEnabled = $state(true);
+  let secure = $state(false);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
   let mode = $state('start'), operation = $state('live'), nodes = $state([]), edges = $state([]);
   let board = null, canvasUtts = [], nextUtt = 1, modeVersion = 0, speechCapture = null, drawing = null, audio = null;
@@ -190,6 +190,7 @@
     busy=true;
     let invoked=false;
     let originalHtml=null;
+    let selectedMarks=[];
     try{
       await markQueue.flush();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
@@ -199,7 +200,7 @@
       const speechOnly=force&&manualAction==='speech-only';
       const sent=speechOnly?speechOnlyEvents(selected):selected;
       if(!force&&!sent.some(e=>e.kind==='transcript'))return;
-      const selectedMarks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
+      selectedMarks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
       const turn=sent.find(e=>e.kind==='transcript');
       const bundle=turn ? buildBundles(sent).find(b=>b.transcript===turn.text) : buildBundles(sent)[0];
       const bundles=bundle?[{...bundle,strokes:selectedMarks}]:[];
@@ -246,7 +247,11 @@
       }
       if(typeof err.agentMessage==='string')addLine('coord','PREPARED / NOT SENT · FULL AGENT MESSAGE',{copyText:err.agentMessage,state:'PREPARED / NOT SENT'});
       if(invoked){providerFailed=true;manualAction='retry';}
-      addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';
+      if(err.status===409&&selectedMarks.length&&err.message.startsWith('mark not accepted by backend')){
+        await restoreReceipts(selectedMarks,deliveries,deliver);
+        status=canApply(selectedMarks,deliveries)?'MARK RECEIPT RESTORED. RETRY AGENT.':'RETRY FAILED MARKS BEFORE APPLY.';
+      }else status='APPLY FAILED. RETRY.';
+      addLine('err','APPLY FAILED: '+err.message);
     }}
     finally{busy=false;}
   }
@@ -381,7 +386,6 @@
         }
       }});
       secure=window.isSecureContext;
-      publishEnabled=config.publishEnabled;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
     return ()=>{audio?.destroy();clearTimeout(museTimer);clearInterval(tick);};
   });
@@ -496,7 +500,7 @@
       <div class="actions">
         {#if operation==='live'}
           {#if manualAction}<Button id="btnApply" variant="primary" disabled={busy} onclick={() => apply(true)}>{manualAction==='retry'?'RETRY AGENT':manualAction==='speech-only'?'SEND SPEECH ONLY':'SEND SKETCHES'} <Asterisk size={13} weight={2.6} /></Button>{/if}
-          <p class="notice">LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY. SKETCHES WITHOUT SPEECH CAN BE SENT SEPARATELY. {#if !publishEnabled}REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED.{/if}</p>
+          <p class="notice">LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY. SKETCHES WITHOUT SPEECH CAN BE SENT SEPARATELY. CHANGES STAY IN THIS PREVIEW; NOTHING IS PUBLISHED.</p>
         {:else}<Button id="btnCopy" variant="primary" onclick={copyArtifact}>COPY ARTIFACT</Button><p class="notice">RECORDING: VOICE AND MARKS STAY ON ONE CLOCK. NOTHING IS SENT TO THE AGENT.</p>{/if}
       </div>
     {:else}

@@ -152,7 +152,9 @@ The document limit is 200,000 UTF-8 bytes. Each turn allows at most three model 
 
 **Not yet built:** identifying the individual printed word inside an element such as `h1` when circled. Current targeting reports the DOM element; word-range geometry needs its own implementation and browser checks. Shape fixtures are synthetic, so test real hand-drawn traces before treating a tentative label as reliable.
 
-**Not built on purpose:** auto deploy of agent changes. The preview is the website. Going live is one explicit command (`vercel deploy staging --prod`) that a human runs when the idea is ready.
+**Not built on purpose:** auto deploy of agent changes. The preview is the website; there is no publish endpoint or staged deployment artifact. A human handles any deployment separately.
+
+For receipt lifetime and server operation, see [Operations](docs/OPERATIONS.md). For local checks and the still-unverified browser Live path, see [Verification](docs/VERIFICATION.md).
 
 ## Demo
 

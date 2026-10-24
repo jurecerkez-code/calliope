@@ -209,7 +209,7 @@ test('Calliope retains its brand and preview controls without a publish action',
   assert.match(app, /id="btnApply"/);
   assert.doesNotMatch(app, /id="btnPublish"|\/api\/publish|async function publish\(/);
   assert.match(app, /LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY/);
-  assert.match(app, /REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED/);
+  assert.match(app, /CHANGES STAY IN THIS PREVIEW; NOTHING IS PUBLISHED/);
   assert.match(app, /ack\.agent_message/);
   assert.match(app, /AGENT SKETCH CONTEXT/);
   assert.match(app, /out\.agent_message/);
@@ -435,6 +435,8 @@ test('the live studio triggers turn-scoped execution and waits for an active str
   assert.match(app,/nextLiveEvents\(live,allRelations\)/);
   assert.match(app,/strokeWaiters\.push\(resolve\)/);
   assert.match(app,/canApply\(selectedMarks,deliveries\)/);
+  assert.match(app,/err\.status===409.*selectedMarks\.length/);
+  assert.match(app,/restoreReceipts\(selectedMarks,deliveries,deliver\)/);
   assert.match(app,/if\(!force&&!sent\.some\(e=>e\.kind==='transcript'\)\)return/);
   assert.match(app,/speechOnly\?speechOnlyEvents\(selected\):selected/);
   assert.match(app,/if\(traceFailed\)throw new Error\('SESSION TRACE UNAVAILABLE/);
@@ -460,6 +462,19 @@ test('speech-only escape submits a turn without its unfinished source mark', asy
   const sent=speechOnlyEvents(selected);
   assert.deepEqual(sent,[turn]);
   assert.deepEqual(timeline.filter(e=>!sent.includes(e)),[source]);
+});
+
+test('expired receipts are resent before retrying the same Live turn', async () => {
+  const { restoreReceipts } = await import('../src/modes.js');
+  const marks=[{id:'first'},{id:'second'}], deliveries={first:'accepted',second:'accepted'};
+  const sent=[];
+  await restoreReceipts(marks,deliveries,async mark=>{
+    assert.equal(deliveries[mark.id],'failed');
+    sent.push(mark.id);
+    deliveries[mark.id]='accepted';
+  });
+  assert.deepEqual(sent,['first','second']);
+  assert.deepEqual(deliveries,{first:'accepted',second:'accepted'});
 });
 
 test('studio has no text instruction entry; mode events remain separate', async () => {

@@ -34,7 +34,7 @@ class OriginUpstream(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        body = json.dumps({'audioPort': 8081, 'publishEnabled': False}).encode()
+        body = json.dumps({'audioPort': 8081}).encode()
         self.send_response(200)
         self.send_header('content-type', 'application/json')
         self.send_header('content-length', str(len(body)))

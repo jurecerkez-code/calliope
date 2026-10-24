@@ -3,6 +3,7 @@ export async function consumeApplyStream(response, onEdit) {
   if (!response.ok) {
     const out = await response.json();
     const error = new Error(out.error || 'HTTP ' + response.status);
+    error.status = response.status;
     error.agentMessage = out.agent_message;
     throw error;
   }

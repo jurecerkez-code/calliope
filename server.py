@@ -14,6 +14,7 @@ import re
 import stat
 import subprocess
 import threading
+import time
 import urllib.error
 from functools import lru_cache
 from html.parser import HTMLParser
@@ -75,6 +76,18 @@ STROKES = {}
 STROKES_LOCK = threading.Lock()
 IMPORT_SLOTS = threading.BoundedSemaphore(4)
 MARKS = {}
+STROKE_SEEN = {}
+MARK_SEEN = {}
+RECEIPT_TTL = 3600  # Inactive receipts expire; live work is refreshed on readback/APPLY.
+
+def expire_receipts():
+    """Call under STROKES_LOCK before using either bounded receipt store."""
+    cutoff = time.monotonic() - RECEIPT_TTL
+    for store, seen in ((STROKES, STROKE_SEEN), (MARKS, MARK_SEEN)):
+        for key, last_seen in list(seen.items()):
+            if last_seen < cutoff:
+                seen.pop(key, None)
+                store.pop(key, None)
 
 def trace_event(session_id, event, data):
     """Append one private, durable JSON line; never write credentials or audio."""
@@ -705,8 +718,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/config':
-            self._send(200, {'audioPort': AUDIO_PORT,
-                             'publishEnabled': os.environ.get('CALLIOPE_REVIEW_MODE') != '1'})
+            self._send(200, {'audioPort': AUDIO_PORT})
         elif self.path.startswith('/assets/') and ASSET_NAME.fullmatch(self.path[len('/assets/'):]):
             file = ASSETS / self.path[len('/assets/'):]
             if not file.is_file() or file.is_symlink() or file.stat().st_size > 2_000_000 or file.resolve().parent != ASSETS.resolve():
@@ -805,15 +817,20 @@ class Handler(BaseHTTPRequestHandler):
             if not valid_stroke(payload):
                 return self._send(400, {'error': 'invalid stroke'})
             with STROKES_LOCK:
+                expire_receipts()
                 if len(STROKES) >= 500 and payload['id'] not in STROKES:
                     return self._send(507, {'error': 'stroke store full'})
                 if payload['id'] in STROKES and STROKES[payload['id']] != payload:
                     return self._send(409, {'error': 'id conflict'})
                 STROKES[payload['id']] = payload
+                STROKE_SEEN[payload['id']] = time.monotonic()
             self._send(201, {'id': payload['id'], 'status': 'accepted'})
         elif self.path == '/api/strokes/readback':
             with STROKES_LOCK:
+                expire_receipts()
                 stroke = STROKES.get(payload.get('id'))
+                if stroke:
+                    STROKE_SEEN[payload['id']] = time.monotonic()
             self._send(200, {'stroke': stroke}) if stroke else self._send(404, {'error': 'not found'})
         elif self.path == '/api/marks':
             if not valid_mark(payload):
@@ -823,6 +840,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {'error': 'invalid trace session id'})
             payload = {key: value for key, value in payload.items() if key != 'session_id'}
             with STROKES_LOCK:
+                expire_receipts()
                 if len(MARKS) >= 500 and payload['id'] not in MARKS:
                     return self._send(507, {'error': 'mark store full'})
                 if payload['id'] in MARKS and MARKS[payload['id']] != payload:
@@ -833,11 +851,15 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     return self._send(507, {'error': 'trace write failed; mark not accepted'})
                 MARKS[payload['id']] = payload
+                MARK_SEEN[payload['id']] = time.monotonic()
             self._send(201, {'id': payload['id'], 'status': 'accepted',
                              'agent_message': agent_sketch_message(payload)})
         elif self.path == '/api/marks/readback':
             with STROKES_LOCK:
+                expire_receipts()
                 mark = MARKS.get(payload.get('id'))
+                if mark:
+                    MARK_SEEN[payload['id']] = time.monotonic()
             self._send(200, {'mark': mark}) if mark else self._send(404, {'error': 'not found'})
         elif self.path == "/api/apply":
             prompt = None
@@ -852,8 +874,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 strokes = [s for b in payload.get('bundles', []) for s in b.get('strokes', [])]
                 with STROKES_LOCK:
+                    expire_receipts()
                     if any((MARKS if isinstance(s.get('strokes'), list) else STROKES).get(s.get('id')) != s for s in strokes):
                         return self._send(409, {'error': 'mark not accepted by backend; retry delivery'})
+                    for stroke in strokes:
+                        seen = MARK_SEEN if isinstance(stroke.get('strokes'), list) else STROKE_SEEN
+                        seen[stroke['id']] = time.monotonic()
                 if not valid_relations(payload.get('relations', []), strokes):
                     return self._send(400, {'error': 'invalid arrow relation for accepted marks'})
                 bundles, html = payload.get('bundles', []), payload.get('current_html', '')
@@ -942,15 +968,6 @@ class Handler(BaseHTTPRequestHandler):
                     self._stream_event('error', error=str(e))
                 else:
                     self._send(500, {"error": str(e), 'agent_message': prompt})
-        elif self.path == "/api/publish":
-            if os.environ.get('CALLIOPE_REVIEW_MODE') == '1':
-                return self._send(404, {'error': 'not available in review'})
-            # explicit and staged: nothing goes live from the meeting
-            stage = HERE / "staging"
-            stage.mkdir(exist_ok=True)
-            p = stage / "index.html"
-            p.write_text(payload.get("html", ""))
-            self._send(200, {"path": str(p), "command": "vercel deploy staging --prod"})
         else:
             self._send(404, {"error": "not found"})
 

@@ -40,6 +40,15 @@ export function nextLiveEvents(events, relations) {
 // An incomplete move may be sent as words alone; retain its source mark.
 export const speechOnlyEvents = selected => selected.filter(e => e.kind === 'transcript');
 
+// When APPLY reports missing receipts, re-register the selected immutable
+// marks; keep the turn queued until the user explicitly retries.
+export async function restoreReceipts(marks, deliveries, deliver) {
+  await Promise.all(marks.map(mark => {
+    deliveries[mark.id] = 'failed';
+    return deliver(mark);
+  }));
+}
+
 // Keep a spoken move with its circled source until an arrow supplies the
 // destination. Otherwise live speech APPLY consumes the circle before the
 // following arrow can refer to it.
