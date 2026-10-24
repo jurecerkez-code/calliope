@@ -35,34 +35,58 @@ MODEL = os.environ.get("MODEL", "claude-sonnet-4-5")  # confirm exact id in the 
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
-    "&include_timestamps=true&eager_turn_probability=0.5&final_turn_probability=0.92"
+    "&include_timestamps=true&include_words=true"
+    "&eager_turn_probability=0.5&final_turn_probability=0.92"
 )
+# Shared with the Chrome extension: stroke geometry, DOM targets, fusion, Reson8 adapter.
+LIB_DIR = HERE / "extension" / "lib"
+LIB_FILES = {"strokes.js", "targets.js", "fusion.js", "reson8.js"}
 HTTP_PORT = 8800
 AUDIO_PORT = 8801
 
 
 # ---------- Anthropic: REASON about the turn, then EXECUTE the website change ----------
+def _target_desc(t: dict) -> str:
+    return f"{t.get('tag', '')} {t.get('selector', '')} \"{t.get('label', '')}\" ({round(t.get('confidence', 0) * 100)}%)"
+
+
 def claude_apply(bundles: list, current_html: str) -> dict:
     """bundles: [{t_start, t_end, transcript, strokes:[{t,t_end,pts,elements}]}]
+    Optional fields (sent by index.html, absent from older callers such as
+    e2e_voice_test.py): bundle.intent, bundle.references:[{word, atMs, strokeId}],
+    stroke.id, stroke.shape, stroke.anchor:{x,y} (arrow end for lines),
+    stroke.targets:[{selector,label,tag,confidence}].
     Returns {"reasoning": str, "html": str}."""
     timeline_desc = []
     for b in bundles:
-        timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}")
+        intent = f" (intent: {b['intent']})" if b.get("intent") else ""
+        timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}{intent}")
         for s in b.get("strokes", []):
-            els = ", ".join(s.get("elements", [])) or "background"
             pts = s.get("pts", [])
             box = ""
             if pts:
                 xs = [p["x"] for p in pts]
                 ys = [p["y"] for p in pts]
                 box = f" box=({min(xs)},{min(ys)})-({max(xs)},{max(ys)})"
+            if s.get("shape") == "line" and s.get("anchor"):
+                box += f" ends at ({s['anchor']['x']},{s['anchor']['y']})"
+            label = f"SKETCH {s['id']} ({s.get('shape', 'mark')})" if s.get("id") else "SKETCH"
+            if s.get("targets"):
+                on = "; ".join(_target_desc(t) for t in s["targets"])
+            else:
+                on = ", ".join(s.get("elements", [])) or "background"
             timeline_desc.append(
-                f"[{s.get('t', 0)}-{s.get('t_end', 0)}ms] SKETCH on: {els}{box}, {len(pts)} points"
+                f"[{s.get('t', 0)}-{s.get('t_end', 0)}ms] {label} on: {on}{box}, {len(pts)} points"
             )
+        for r in b.get("references", []):
+            word = f'"{r["word"]}"' if r.get("word") else "(no pointing word, nearest in time)"
+            timeline_desc.append(f"[{r.get('atMs', 0)}ms] REFERENCE {word} -> {r.get('strokeId') or 'no sketch'}")
     prompt = (
         "You are a web design agent in a live meeting. The user SPEAKS while DRAWING on top "
         "of a website. Each transcript chunk carries the sketches drawn in the SAME PERIOD. "
-        "Elements listed under a sketch are the HTML elements the marks were drawn on top of.\n\n"
+        "Elements listed under a sketch are the HTML elements the marks were drawn on top of, "
+        "best match first. A REFERENCE line ties a spoken word such as \"this\" or \"here\" "
+        "to the sketch drawn closest to it in time.\n\n"
         "REASON FIRST: one short paragraph. What does the user want changed, combining words "
         "and sketches? Note conflicts between words and marks explicitly.\n"
         "THEN EXECUTE: return the COMPLETE updated HTML (single file, inline CSS, no external "
@@ -120,6 +144,13 @@ class Handler(BaseHTTPRequestHandler):
             data = (HERE / "jamie-mock.html").read_bytes()
             self.send_response(200)
             self.send_header("content-type", "text/html")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        elif self.path.startswith("/lib/") and self.path[5:] in LIB_FILES:
+            data = (LIB_DIR / self.path[5:]).read_bytes()
+            self.send_response(200)
+            self.send_header("content-type", "text/javascript")
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

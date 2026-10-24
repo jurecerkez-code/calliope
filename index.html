@@ -35,6 +35,15 @@
   #eqWrap{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid var(--line);}
   #eq{width:100%;height:44px;}
   #eqLabel{font-size:9px;color:var(--muted);white-space:nowrap;}
+  #tlWrap{border-top:1px solid var(--line);padding:6px 12px 8px;}
+  #tlWrap h4{font-size:9px;color:var(--muted);letter-spacing:.14em;font-weight:400;margin-bottom:4px;}
+  #tl svg{display:block;width:100%;height:auto;}
+  #tl .lane{fill:#06100b;} #tl .lane-label,#tl .tick-label{fill:var(--muted);font-size:8px;}
+  #tl .tick{stroke:var(--line);} #tl .now{stroke:var(--red);}
+  #tl .mark{fill:var(--green);} #tl .mark-id{fill:var(--bg);font-size:8px;font-weight:700;}
+  #tl .utt{fill:var(--blue);opacity:.25;} #tl .utt.live{fill:none;stroke:var(--blue);stroke-dasharray:3 2;opacity:.8;}
+  #tl .word{stroke:var(--blue);} #tl .word.deictic{stroke:var(--amber);stroke-width:2;}
+  #tl .ref{fill:var(--amber);} #tl .ref.none{fill:var(--muted);} #tl .ref-link{stroke:var(--amber);stroke-dasharray:2 2;opacity:.7;}
 </style>
 </head>
 <body>
@@ -47,6 +56,10 @@
   <div class="pane">
     <h3>TRANSCRIPT + SKETCH LOG // ONE CLOCK</h3>
     <div id="feed"></div>
+    <div id="tlWrap">
+      <h4>TIMELINE // MARKS . WORDS . LINKS</h4>
+      <div id="tl" role="img" aria-label="Timeline of marks, speech and the words that point at marks"></div>
+    </div>
     <div id="eqWrap">
       <div id="eqLabel">VOICE LEVEL</div>
       <canvas id="eq"></canvas>
@@ -70,17 +83,24 @@
     <div class="row"><div id="status">GREEN MARKS ON THE PAGE GO TO THE AGENT WITH THE WORDS FROM THE SAME PERIOD.</div></div>
   </div>
 </main>
-<script>
-'use strict';
+<script type="module">
+/* shared with the Chrome extension (served by server.py from extension/lib) */
+import { makeStroke } from '/lib/strokes.js';
+import { resolveTargets } from '/lib/targets.js';
+import { fuse, DEICTICS, simulateWords, MS_PER_WORD } from '/lib/fusion.js';
+import { adaptMessage } from '/lib/reson8.js';
 var feed = document.getElementById('feed');
 var prev = document.getElementById('prev');
 var status = document.getElementById('status');
 var t0 = Date.now();
 
-/* single event log: transcript chunks and strokes on one clock */
-var timeline = [];      // {t, kind:'transcript'|'stroke', ...}
+/* strokes and utterances on one clock: ms since t0 */
+var strokes = [];       // makeStroke records: {id, startMs, endMs, shape, bbox, anchor, points, targets}
+var utterances = [];    // {id, startMs, endMs, text, final, source, words:[{text,startMs,endMs}]}
+var nextStroke = 1, nextUtt = 1;
 var micOn = false, ws = null, audioCtx = null, analyser = null;
-var lastCandidate = '', lastInterEl = null;
+var lastCandidate = null, lastInterEl = null;
+var audioStartMs = null;  // session time of the first audio sample sent to Reson8
 
 function fmt(ms){ var s = Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }
 function addLine(cls, txt){
@@ -136,49 +156,43 @@ function attachOverlay(){
   overlay.style.height = overlay.height + 'px';
   octx = overlay.getContext('2d');
 
-  function hit(x, y){
-    /* elements under the mark: full stack at this point, minus our overlay */
-    var stack = doc.elementsFromPoint(x, y) || [];
-    for(var i = 0; i < stack.length; i++){
-      if(stack[i] !== overlay) return stack[i];
-    }
-    return null;
-  }
   function pt(e){
     var r = overlay.getBoundingClientRect();
-    return {x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top)};
+    /* the canvas covers the whole document, so this is page coordinates */
+    return {x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top), t: Date.now()-t0};
   }
   overlay.addEventListener('pointerdown', function(e){
     drawing = true;
     try{ overlay.setPointerCapture(e.pointerId); }catch(_){}
-    var p = pt(e);
-    var el = hit(p.x, p.y);
-    var s = sel(el);
-    cur = {t: Date.now()-t0, pts: [p], elements: s ? [s] : []};
-    if(el && el.style){ el.__vdOutline = el.style.outline; el.style.outline = '2px dashed #00e05a'; el.style.outlineOffset = '2px'; markedEls.push(el); }
+    cur = {pts: [pt(e)]};
     octx.strokeStyle = '#00e05a'; octx.lineWidth = 3; octx.lineCap = 'round';
-    addLine('st', 'MARK ON ' + (s || 'background'));
     e.preventDefault();
   });
   overlay.addEventListener('pointermove', function(e){
     if(!drawing || !cur) return;
     var p = pt(e), last = cur.pts[cur.pts.length-1];
     cur.pts.push(p);
-    var el = hit(p.x, p.y), s = sel(el);
-    if(s && cur.elements.indexOf(s) < 0){
-      cur.elements.push(s);
-      if(el && el.style){ el.__vdOutline = el.style.outline; el.style.outline = '2px dashed #00e05a'; el.style.outlineOffset = '2px'; markedEls.push(el); }
-    }
     octx.beginPath(); octx.moveTo(last.x, last.y); octx.lineTo(p.x, p.y); octx.stroke();
     e.preventDefault();
   });
-  overlay.addEventListener('pointerup', function(){
+  overlay.addEventListener('pointerup', function(e){
     if(!drawing || !cur) return;
     drawing = false;
-    cur.t_end = Date.now()-t0;
-    timeline.push({kind:'stroke', t: cur.t, t_end: cur.t_end, pts: cur.pts, elements: cur.elements});
-    addLine('st', 'SKETCH ' + cur.pts.length + ' PTS ON: ' + cur.elements.join(', ').slice(0,90));
+    cur.pts.push(pt(e));
+    /* element lookup happens once per stroke, here, not on every move */
+    var stroke = makeStroke('S' + nextStroke++, cur.pts);
+    stroke.targets = resolveTargets(stroke, {doc: doc, ignore: [overlay]});
+    strokes.push(stroke);
+    var top = stroke.targets[0];
+    var el = top ? doc.querySelector(top.selector) : null;
+    if(el && el.style){ el.__vdOutline = el.style.outline; el.style.outline = '2px dashed #00e05a'; el.style.outlineOffset = '2px'; markedEls.push(el); }
+    var p0 = stroke.points[0];
+    octx.fillStyle = '#00e05a'; octx.font = '700 11px monospace';
+    octx.fillText(stroke.id, p0.x - 22, p0.y - 6);
+    addLine('st', 'SKETCH ' + stroke.id + ' ' + stroke.shape.toUpperCase() + ' ON: ' +
+      (top ? top.selector + ' "' + top.label.slice(0, 40) + '" ' + Math.round(top.confidence*100) + '%' : 'background'));
     cur = null;
+    renderTimeline();
   });
 }
 function loadPreview(){
@@ -216,7 +230,9 @@ document.getElementById('btnMic').addEventListener('click', async function(){
       var type = msg.type || '', txt = msg.text || '';
       if(type === 'turn_end_candidate'){
         if(!txt) return;
-        lastCandidate = txt;
+        lastCandidate = msg;  /* the last candidate carries text, start_ms, duration_ms, words */
+        liveTurn = adaptTurn(msg);
+        renderTimeline();
         if(lastInterEl){ lastInterEl.textContent = txt; }
         else{
           addLine('inter', txt);
@@ -225,23 +241,29 @@ document.getElementById('btnMic').addEventListener('click', async function(){
         return;
       }
       if(type === 'turn_end'){
-        var finalTxt = txt || lastCandidate;
+        var cand = lastCandidate || {};
+        var finalTxt = txt || cand.text || '';
         if(finalTxt){
-          timeline.push({kind:'transcript', t: Date.now()-t0, text: finalTxt});
+          var u = adaptTurn(Object.assign({}, cand, {text: finalTxt}));
+          utterances.push(Object.assign({id: 'U' + nextUtt++, final: true, source: 'reson8'}, u));
           addLine('fin', finalTxt);
         }
-        lastCandidate = ''; lastInterEl = null;
+        lastCandidate = null; lastInterEl = null; liveTurn = null;
+        renderTimeline();
         return;
       }
       if(type === 'turn_start'){ addLine('inter', '(listening)'); lastInterEl = null; return; }
       if(txt){ addLine('inter', txt); }
     };
-    ws.onopen = function(){ addLine('fin', 'RESON8 LINK UP (calliope). SPEAK.'); };
+    ws.onopen = function(){ audioStartMs = null; addLine('fin', 'RESON8 LINK UP (calliope). SPEAK.'); };
     proc.onaudioprocess = function(e){
       if(ws && ws.readyState === 1){
         var f = e.inputBuffer.getChannelData(0);
         var rate = audioCtx.sampleRate || 16000;
         var n = rate === 16000 ? f.length : Math.floor(f.length * 16000 / rate);
+        /* Reson8 times are relative to the first audio sample it receives. This frame
+           holds n samples captured before now, so the stream starts n/16 ms earlier. */
+        if(audioStartMs === null) audioStartMs = Date.now() - t0 - n / 16;
         var buf = new ArrayBuffer(n*2), dv = new DataView(buf);
         for(var i=0;i<n;i++){
           var s = rate === 16000 ? f[i] : f[Math.floor(i * rate / 16000)];
@@ -255,35 +277,132 @@ document.getElementById('btnMic').addEventListener('click', async function(){
   }catch(err){ addLine('err', 'MIC FAILED: '+err.message + (location.protocol === 'file:' ? ' -- OPEN http://127.0.0.1:8800 IN CHROME, NOT THE FILE' : '')); }
 });
 
-/* ---------- chunking: transcript chunk + strokes from the same period ---------- */
-function buildBundles(){
-  /* one bundle per transcript chunk; strokes that START inside the chunk window
-     travel whole, so a stroke crossing a chunk boundary is never cut in half */
-  var events = timeline.slice().sort(function(a,b){ return a.t - b.t; });
-  var out = [], chunk = null;
-  for(var i=0;i<events.length;i++){
-    var e = events[i];
-    if(e.kind === 'transcript'){
-      if(chunk) out.push(chunk);
-      chunk = {t_start: e.t, t_end: e.t, transcript: e.text, strokes: []};
-    } else if(chunk){
-      chunk.strokes.push({t: e.t, t_end: e.t_end, pts: e.pts, elements: e.elements});
-      chunk.t_end = Math.max(chunk.t_end, e.t_end || e.t);
-    } else {
-      chunk = {t_start: e.t, t_end: e.t_end || e.t,
-        transcript: '(sketch before any speech)',
-        strokes: [{t: e.t, t_end: e.t_end, pts: e.pts, elements: e.elements}]};
-    }
+/* ---------- turn timing: Reson8 stream time -> session clock ---------- */
+var liveTurn = null;   /* latest candidate of the turn in progress, for the timeline */
+function adaptTurn(msg){
+  /* turns and realtime share the timing fields (start_ms, duration_ms, words), so the
+     extension's realtime adapter applies once the message type is set */
+  var u = adaptMessage(Object.assign({}, msg, {type: 'transcript'}), audioStartMs);
+  if(msg.start_ms == null || audioStartMs === null){
+    /* no timestamps: assume the turn just ended, at a normal speaking rate */
+    var n = u.text.split(/\s+/).filter(Boolean).length;
+    u.endMs = Date.now() - t0;
+    u.startMs = Math.max(0, u.endMs - n * MS_PER_WORD);
+    u.words = simulateWords(u.text, u.startMs, u.endMs);
+  } else if(!u.words.length){
+    u.words = simulateWords(u.text, u.startMs, u.endMs);
   }
-  if(chunk) out.push(chunk);
-  return out;
+  return u;
 }
+
+/* ---------- matching: each transcript chunk + the strokes it points at ---------- */
+function gapMs(u, st){
+  if(st.endMs >= u.startMs && st.startMs <= u.endMs) return 0;
+  return st.endMs < u.startMs ? u.startMs - st.endMs : st.startMs - u.endMs;
+}
+function strokeOut(st){
+  return {id: st.id, t: st.startMs, t_end: st.endMs, shape: st.shape, bbox: st.bbox, anchor: st.anchor,
+    pts: st.points.map(function(p){ return {x: Math.round(p.x), y: Math.round(p.y)}; }),
+    elements: st.targets.map(function(t){ return t.selector; }), targets: st.targets};
+}
+function buildBundles(){
+  /* A stroke goes to the utterance whose "this"/"here" binds to it (nearest in time,
+     6 s before to 2.5 s after the word, see extension/lib/fusion.js). Strokes nobody
+     points at go to the utterance closest in time. Every stroke travels whole, in
+     exactly one bundle. */
+  var fused = fuse(utterances, strokes);
+  var owner = {};
+  fused.forEach(function(u, i){
+    u.references.forEach(function(r){ if(r.strokeId && owner[r.strokeId] == null) owner[r.strokeId] = i; });
+  });
+  var loose = [];
+  strokes.forEach(function(st){
+    if(owner[st.id] != null) return;
+    if(!fused.length){ loose.push(st); return; }
+    var best = 0;
+    fused.forEach(function(u, i){ if(gapMs(u, st) < gapMs(fused[best], st)) best = i; });
+    owner[st.id] = best;
+  });
+  var out = fused.map(function(u, i){
+    var mine = strokes.filter(function(st){ return owner[st.id] === i; });
+    return {
+      t_start: Math.min.apply(null, [u.startMs].concat(mine.map(function(st){ return st.startMs; }))),
+      t_end: Math.max.apply(null, [u.endMs].concat(mine.map(function(st){ return st.endMs; }))),
+      transcript: u.text, intent: u.intent,
+      references: u.references.map(function(r){ return {word: r.word, atMs: r.atMs, strokeId: r.strokeId}; }),
+      strokes: mine.map(strokeOut)
+    };
+  });
+  if(loose.length){
+    out.unshift({t_start: loose[0].startMs, t_end: loose[loose.length-1].endMs,
+      transcript: '(sketch before any speech)', references: [], strokes: loose.map(strokeOut)});
+  }
+  return out.sort(function(a, b){ return a.t_start - b.t_start; });
+}
+
+/* ---------- timeline: marks, words, and the words that point at marks ---------- */
+var SVG = 'http://www.w3.org/2000/svg';
+function sv(tag, attrs, title){
+  var el = document.createElementNS(SVG, tag);
+  for(var k in attrs) if(attrs[k] != null) el.setAttribute(k, attrs[k]);
+  if(title){ var t = document.createElementNS(SVG, 'title'); t.textContent = title; el.appendChild(t); }
+  return el;
+}
+function renderTimeline(){
+  var box = document.getElementById('tl');
+  var W = Math.max(240, box.clientWidth || 300), left = 40, right = 4, laneH = 16, gap = 4, top = 2;
+  var H = top + 3 * (laneH + gap) + 10;
+  var now = Date.now() - t0;
+  var first = Math.min.apply(null, [now].concat(strokes.map(function(st){ return st.startMs; }), utterances.map(function(u){ return u.startMs; })));
+  var t1 = Math.max(first + 10000, now + 500), t0v = Math.max(0, Math.min(first - 500, t1 - 60000));
+  var x = function(ms){ return left + (Math.min(Math.max(ms, t0v), t1) - t0v) / (t1 - t0v) * (W - left - right); };
+  var ly = function(i){ return top + i * (laneH + gap); };
+  var svg = sv('svg', {viewBox: '0 0 ' + W + ' ' + H, width: W, height: H});
+  ['MARKS', 'WORDS', 'LINKS'].forEach(function(name, i){
+    svg.appendChild(sv('rect', {'class': 'lane', x: left, y: ly(i), width: W - left - right, height: laneH}));
+    var l = sv('text', {'class': 'lane-label', x: 0, y: ly(i) + laneH / 2 + 3}); l.textContent = name; svg.appendChild(l);
+  });
+  var step = (t1 - t0v) > 30000 ? 10000 : 5000;
+  for(var tk = Math.ceil(t0v / step) * step; tk <= t1; tk += step){
+    svg.appendChild(sv('line', {'class': 'tick', x1: x(tk), x2: x(tk), y1: top, y2: ly(2) + laneH}));
+    var tl = sv('text', {'class': 'tick-label', x: x(tk), y: H - 1, 'text-anchor': 'middle'}); tl.textContent = fmt(tk); svg.appendChild(tl);
+  }
+  var mid = {};
+  strokes.forEach(function(st){
+    var x1 = x(st.startMs), x2 = Math.max(x(st.endMs), x1 + 12);
+    mid[st.id] = (x1 + x2) / 2;
+    svg.appendChild(sv('rect', {'class': 'mark', x: x1, y: ly(0) + 2, width: x2 - x1, height: laneH - 4},
+      st.id + ' ' + st.shape + (st.targets[0] ? ' on ' + st.targets[0].selector : '')));
+    var id = sv('text', {'class': 'mark-id', x: x1 + 2, y: ly(0) + laneH / 2 + 3}); id.textContent = st.id; svg.appendChild(id);
+  });
+  var fused = fuse(utterances, strokes);
+  fused.concat(liveTurn ? [Object.assign({live: true}, liveTurn)] : []).forEach(function(u){
+    var x1 = x(u.startMs), x2 = Math.max(x(u.endMs), x1 + 3);
+    svg.appendChild(sv('rect', {'class': 'utt' + (u.live ? ' live' : ''), x: x1, y: ly(1) + 2, width: x2 - x1, height: laneH - 4}, u.text));
+    (u.words || []).forEach(function(w){
+      var d = DEICTICS.has(w.text.toLowerCase().replace(/[^a-z]/g, ''));
+      svg.appendChild(sv('line', {'class': 'word' + (d ? ' deictic' : ''), x1: x(w.startMs), x2: x(w.startMs), y1: ly(1) + 4, y2: ly(1) + laneH - 4}, w.text));
+    });
+  });
+  fused.forEach(function(u){
+    u.references.forEach(function(r){
+      var rx = x(r.atMs), ry = ly(2) + laneH / 2;
+      if(r.strokeId && mid[r.strokeId] != null) svg.appendChild(sv('line', {'class': 'ref-link', x1: rx, y1: ry, x2: mid[r.strokeId], y2: ly(0) + laneH - 2}));
+      svg.appendChild(sv('circle', {'class': 'ref' + (r.strokeId ? '' : ' none'), cx: rx, cy: ry, r: 3.5},
+        (r.word ? '"' + r.word + '"' : '(nearest in time)') + ' -> ' + (r.strokeId || 'no mark')));
+    });
+  });
+  svg.appendChild(sv('line', {'class': 'now', x1: x(now), x2: x(now), y1: top, y2: ly(2) + laneH}));
+  box.replaceChildren(svg);
+}
+setInterval(renderTimeline, 500);
+renderTimeline();
 
 /* ---------- apply: Anthropic reasons, then executes. Preview only. ---------- */
 document.getElementById('btnApply').addEventListener('click', async function(){
   var typed = document.getElementById('instr').value;
   var bs = buildBundles();
-  var allStrokes = timeline.filter(function(e){ return e.kind === 'stroke'; });
+  var allStrokes = strokes.map(strokeOut);
   if(!typed && !bs.length){ addLine('err', 'NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.'); return; }
   status.innerHTML = 'ANTHROPIC IS REASONING...'; this.disabled = true;
   try{
@@ -300,7 +419,8 @@ document.getElementById('btnApply').addEventListener('click', async function(){
     if(out.reasoning) addLine('why', 'AGENT: ' + out.reasoning);
     currentHtml = out.html;
     loadPreview();
-    timeline = [];
+    strokes = []; utterances = []; nextStroke = 1; nextUtt = 1; liveTurn = null;
+    renderTimeline();
     document.getElementById('instr').value = '';
     addLine('fin', 'EXECUTED ON PREVIEW. NOTHING PUBLISHED.');
     status.innerHTML = '<span class="hot">PREVIEW UPDATED. KEEP TALKING.</span>';
