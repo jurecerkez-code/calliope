@@ -156,9 +156,11 @@ The document limit is 200,000 UTF-8 bytes. Each turn allows at most three model 
 
 ## Demo
 
-Two minute video from the hackathon: [link](https://youtu.be/lM6YRUtAhmc)
+[![Watch the 2-minute demo](https://img.youtube.com/vi/lM6YRUtAhmc/hqdefault.jpg)](https://youtu.be/lM6YRUtAhmc)
 
-Or try it on [link](https://calliope.tryapparent.com/)
+Two minute video from the hackathon: [youtu.be/lM6YRUtAhmc](https://youtu.be/lM6YRUtAhmc)
+
+Or try it live: [calliope.tryapparent.com](https://calliope.tryapparent.com/)
 
 ## License
 
