@@ -5,7 +5,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ops.tailnet_https_gate import make_handler
+from ops.tailnet_https_gate import GET_PATHS, make_handler
 
 
 class SlowUpstream(BaseHTTPRequestHandler):
@@ -30,6 +30,10 @@ class SlowUpstream(BaseHTTPRequestHandler):
 
 
 class GateStreamTest(unittest.TestCase):
+    def test_removed_3d_paths_are_not_allowlisted(self):
+        self.assertNotIn('/loader3d.js', GET_PATHS)
+        self.assertNotIn('/assets/logos.glb', GET_PATHS)
+
     def test_first_edit_arrives_before_upstream_finishes(self):
         SlowUpstream.first_sent.clear()
         SlowUpstream.release.clear()

@@ -1115,6 +1115,15 @@ class StudioTest(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(HTTPError):
                 urlopen(self.url + path)
 
+    def test_removed_3d_assets_are_not_served(self):
+        for path in ('/loader3d.js', '/vendor/three.module.js', '/vendor/GLTFLoader.js',
+                     '/assets/logos.glb'):
+            with self.subTest(path=path), self.assertRaises(HTTPError) as error:
+                urlopen(self.url + path)
+            self.assertEqual(error.exception.code, 404)
+        with urlopen(self.url + '/assets/hero.svg') as response:
+            self.assertEqual(response.status, 200)
+
     def test_import_rejects_private_and_redirected_private_addresses(self):
         for target in ('http://127.0.0.1/', 'http://169.254.169.254/latest/meta-data/',
                        'file:///etc/passwd', 'http://user:pass@example.com/'):

@@ -693,15 +693,13 @@ class Handler(BaseHTTPRequestHandler):
             data = (DIST / "index.html").read_bytes()
             self.send_response(200)
             self.send_header("content-type", "text/html")
-            self.send_header("content-security-policy", "default-src 'none'; script-src 'self' 'sha256-y0joblgLTLFGhbj/xXhGS1SyGmxly/oZpyENyx9LBXI='; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src https:; connect-src 'self' ws: wss:; frame-src 'self' about:; object-src 'none'; base-uri https:; form-action 'none'")
+            self.send_header("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src https:; connect-src 'self' ws: wss:; frame-src 'self' about:; object-src 'none'; base-uri https:; form-action 'none'")
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        elif self.path == '/loader3d.js' or self.path.startswith('/vendor/') or self.path.startswith('/assets/'):
+        elif self.path.startswith('/assets/'):
             relative = self.path.lstrip('/')
-            if self.path.startswith('/assets/') and not re.fullmatch(r'assets/[\w.-]+\.(?:svg|png|glb)', relative):
-                return self._send(404, {'error': 'not found'})
-            if self.path.startswith('/vendor/') and not re.fullmatch(r'vendor/(?:utils/)?[\w.-]+\.js', relative):
+            if not re.fullmatch(r'assets/[\w.-]+\.(?:svg|png)', relative):
                 return self._send(404, {'error': 'not found'})
             file = HERE / relative
             if not file.is_file() or file.is_symlink():
