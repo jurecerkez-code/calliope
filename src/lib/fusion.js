@@ -98,7 +98,7 @@ const INTENT_RULES = [
 	],
 	[
 		"move",
-		/\b(move|shift|drag|swap|reorder|relocate)\b|\b(?:put|place) (?:this|that|these|those|it)\b/,
+		/\b(move|shift|drag|swap|reorder|relocate)\b|\b(?:put|place) (?:this|that|these|those|it|the(?! new\b))\b/,
 	],
 	[
 		"add",
@@ -281,3 +281,17 @@ export function packetText(packet) {
 		"Paste the PNG snapshot alongside this. Its numbered badges (S1, S2, ...) match strokes[].id.",
 	].join("\n");
 }
+
+// Estimate word times when the speech provider omits them.
+export function simulateWords(text, startMs, endMs) {
+	const tokens = text.trim().split(/\s+/).filter(Boolean);
+	if (!tokens.length) return [];
+	const span = Math.max(1, endMs - startMs) / tokens.length;
+	return tokens.map((t, i) => ({
+		text: t,
+		startMs: Math.round(startMs + i * span),
+		endMs: Math.round(startMs + i * span + span * 0.9),
+	}));
+}
+
+export const MS_PER_WORD = 380;

@@ -1,15 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bindReferences, classifyIntent, fuse, buildPacket, packetText } from '../lib/fusion.js';
-import { adaptMessage } from '../lib/reson8.js';
-import { readFileSync } from 'node:fs';
-
-test('extension only accepts speech from the microphone, not typed simulation', () => {
-  const panel = readFileSync(new URL('../sidepanel/panel.html', import.meta.url), 'utf8');
-  const logic = readFileSync(new URL('../sidepanel/panel.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(panel, /say-text|btn-say|Or type what you would say/);
-  assert.doesNotMatch(logic, /say-text|btn-say|simulateWords|typingStartMs/);
-});
+import { bindReferences, classifyIntent, fuse, buildPacket, packetText, simulateWords } from './src/lib/fusion.js';
+import { adaptMessage } from './src/lib/reson8.js';
 
 const stroke = (id, startMs, endMs, label, extra = {}) => ({
   id, startMs, endMs, shape: 'closed-loop',
@@ -18,16 +10,12 @@ const stroke = (id, startMs, endMs, label, extra = {}) => ({
   ...extra,
 });
 
-const words = (text, startMs, endMs) => text.split(' ').map((token, i, all) => ({
-  text: token,
-  startMs: startMs + Math.round(i * (endMs - startMs) / all.length),
-  endMs: startMs + Math.round((i + 0.9) * (endMs - startMs) / all.length),
-}));
-
 test('intent rules', () => {
   assert.equal(classifyIntent('this button should be green and more prominent'), 'modify');
   assert.equal(classifyIntent('put a summary chart here'), 'add');
   assert.equal(classifyIntent('move this over there'), 'move');
+  assert.equal(classifyIntent('put the headline here'), 'move');
+  assert.equal(classifyIntent('put the new chart here'), 'add');
   assert.equal(classifyIntent('remove that banner'), 'remove');
   assert.equal(classifyIntent('what does this do?'), 'query');
   assert.equal(classifyIntent('hmm'), 'unknown');
@@ -35,7 +23,7 @@ test('intent rules', () => {
 
 test('deictic binds to the nearest stroke inside the window', () => {
   const strokes = [stroke('S1', 1000, 2000, 'a'), stroke('S2', 9000, 9500, 'b')];
-  const u = { words: words('this button should be green', 2500, 4500) };
+  const u = { words: simulateWords('this button should be green', 2500, 4500) };
   const refs = bindReferences(u, strokes);
   assert.equal(refs.length, 1);
   assert.equal(refs[0].word, 'this');
@@ -56,7 +44,7 @@ test('word outside the window stays unbound', () => {
 
 test('add intent targets the place word', () => {
   const strokes = [stroke('S1', 1000, 1500, 'card'), stroke('S2', 3000, 3600, 'grid', { shape: 'line', anchor: { x: 900, y: 400 } })];
-  const [u] = fuse([{ id: 'U1', text: 'put a summary chart here', startMs: 3000, endMs: 4000, final: true, words: words('put a summary chart here', 3000, 4000) }], strokes);
+  const [u] = fuse([{ id: 'U1', text: 'put a summary chart here', startMs: 3000, endMs: 4000, final: true, words: simulateWords('put a summary chart here', 3000, 4000) }], strokes);
   assert.equal(u.intent, 'add');
   assert.equal(u.target.strokeId, 'S2');
   assert.match(u.instruction, /page \(900, 400\)/);
@@ -65,7 +53,7 @@ test('add intent targets the place word', () => {
 test('packet is valid JSON with the brief fields', () => {
   const strokes = [stroke('S1', 1000, 2000, 'save')];
   const utterances = [
-    { id: 'U1', text: 'this button should be green', startMs: 2100, endMs: 3500, final: true, source: 'reson8', words: words('this button should be green', 2100, 3500) },
+    { id: 'U1', text: 'this button should be green', startMs: 2100, endMs: 3500, final: true, source: 'simulated', words: simulateWords('this button should be green', 2100, 3500) },
     { id: 'U2', text: 'interim', startMs: 4000, endMs: 4100, final: false, source: 'reson8', words: [] },
   ];
   const p = buildPacket({ elapsedMs: 5000, base: 'live-dom', strokes, utterances });

@@ -18,18 +18,22 @@ export function buildArtifact(timeline, {page = '', startedAt = ''} = {}) {
   lines.push('Times are mm:ss since the session started. Shapes are estimates; the spoken words carry the intent.', '');
   for (const b of bundles) {
     lines.push(`## [${clock(b.t_start)}] ${b.transcript}`);
-    for (const s of b.strokes) {
-      const target = ['circle', 'square', 'triangle'].includes(s.shape) && s.enclosed_element
-        ? 'around ' + s.enclosed_element
-        : 'over ' + (s.elements.join(', ') || 'background');
-      lines.push(`- [${clock(s.t)}-${clock(s.t_end)}] ${s.tool} ${s.shape}, x ${s.bbox.x}-${s.bbox.x + s.bbox.width}, y ${s.bbox.y}-${s.bbox.y + s.bbox.height}, ${target}`);
+    for (const mark of b.strokes) {
+      lines.push(`- [${clock(mark.t)}-${clock(mark.t_end)}] ${mark.shape} mark (${mark.strokes.length} path${mark.strokes.length === 1 ? '' : 's'}):`);
+      for (const s of mark.strokes) {
+        const target = ['circle', 'square', 'triangle'].includes(s.shape) && s.enclosed_element
+          ? 'around ' + s.enclosed_element
+          : 'over ' + (s.elements.join(', ') || 'background');
+        lines.push(`  - [${clock(s.t)}-${clock(s.t_end)}] ${s.tool} ${s.shape}, x ${s.bbox.x}-${s.bbox.x + s.bbox.width}, y ${s.bbox.y}-${s.bbox.y + s.bbox.height}, ${target}`);
+      }
     }
     lines.push('');
   }
   const data = bundles.map(b => ({
     t_start: b.t_start, t_end: b.t_end, transcript: b.transcript,
-    strokes: b.strokes.map(s => ({id: s.id, tool: s.tool, shape: s.shape, t: s.t, t_end: s.t_end, bbox: s.bbox,
-      enclosed_element: s.enclosed_element, elements: s.elements, viewBox: s.viewBox, path: s.path}))
+    marks: b.strokes.map(mark => ({id:mark.id, shape:mark.shape, t:mark.t, t_end:mark.t_end,
+      strokes:mark.strokes.map(s => ({id:s.id, tool:s.tool, shape:s.shape, t:s.t, t_end:s.t_end, bbox:s.bbox,
+        enclosed_element:s.enclosed_element, elements:s.elements, viewBox:s.viewBox, path:s.path}))}))
   }));
   lines.push('```json', JSON.stringify({page, startedAt, bundles: data}, null, 2), '```', '');
   return lines.join('\n');
