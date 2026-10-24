@@ -262,3 +262,12 @@ test('studio exposes URL import in its existing preview', () => {
   assert.match(app, /aria-label="Website URL"/);
   assert.match(app, /previewHtml\(out\.html\)/);
 });
+
+test('startup offers website import or a blank canvas without loading a demo site', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /mode = \$state\('start'\)/);
+  assert.match(app, /START BLANK CANVAS/);
+  assert.match(app, /IMPORT WEBSITE/);
+  assert.match(app, /mode='website';drawing\?\.clear\(\)/);
+  assert.doesNotMatch(app, /fetch\('\/jamie-mock\.html'\)/);
+});
