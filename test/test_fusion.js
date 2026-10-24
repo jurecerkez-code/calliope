@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bindReferences, classifyIntent, fuse, buildPacket, packetText, simulateWords } from './src/lib/fusion.js';
-import { adaptMessage } from './src/lib/turn-timing.js';
+import { bindReferences, classifyIntent, fuse, buildPacket, packetText, simulateWords } from '../src/lib/fusion.js';
+import { adaptMessage } from '../src/lib/turn-timing.js';
 
 const stroke = (id, startMs, endMs, label, extra = {}) => ({
   id, startMs, endMs, shape: 'closed-loop',

@@ -1,6 +1,6 @@
 // Prints one valid stroke payload built with the app's own makePayload, so the e2e
-// test registers exactly what the studio would send. Usage: node stroke_fixture.mjs
-import { makePayload } from './src/timeline.js';
+// test registers exactly what the studio would send. Usage: node test/stroke_fixture.mjs
+import { makePayload } from '../src/timeline.js';
 
 const pts = [
   {x:642, y:184, utc:'2026-10-24T12:00:00Z', selector:'button.btn', text:'Download',

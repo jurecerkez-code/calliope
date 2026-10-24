@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makePayload } from './src/timeline.js';
-import { describeSketch } from './src/shape.js';
-import { makeMark } from './src/marks.js';
+import { makePayload } from '../src/timeline.js';
+import { describeSketch } from '../src/shape.js';
+import { makeMark } from '../src/marks.js';
 
 // Synthetic rough marks, not point samples extracted from a screenshot.
 function oval(gap = 0, overshoot = 0) {
