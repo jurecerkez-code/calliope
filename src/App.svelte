@@ -4,11 +4,12 @@
   import Button from './components/ui/button/Button.svelte';
   import Input from './components/ui/input/Input.svelte';
   import { attachDrawing } from './drawing.js';
-  import { buildBundles, canApply, lanes } from './timeline.js';
-  import Lanes from './Lanes.svelte';
+  import { buildBundles, canApply } from './timeline.js';
   import { createMarkQueue, MARK_SETTLE_DELAY_MS } from './marks.js';
   import { createAudio } from './audio.js';
-  let feed, prev, eq;
+  let feed, prev, eq, detailDialog;
+  let detailField = $state(null);
+  let selectedRow = $state(null);
   let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
   let rows = $state([]), tool = $state('pen'), typed = $state(''), url = $state(''), busy = $state(false), micOn = $state(false);
   let imported = false;
@@ -17,8 +18,6 @@
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
   let timeline = [], deliveries = {}, drawing = null, audio = null, activeStroke = false;
   const elapsed = () => Date.now()-started;
-  let lanesData = $state({marks:[],words:[],links:[]});
-  function refreshLanes(){lanesData=lanes(timeline);}
   const fmt = ms => {const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
   function addLine(cls,text,options={}){rows=[...rows,{key:cryptoId(),cls,text,clock:fmt(elapsed()),...options}];scroll();}
   function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
@@ -42,13 +41,22 @@
     }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
   }
   function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
-  function selectMessage(event){
-    const field=event.currentTarget.closest('.message-row').querySelector('textarea');
-    field.focus();field.select();
+  function rowLabel(row){
+    const mark=row.mark || row.stroke?.payload;
+    if(mark)return `${mark.shape.toUpperCase()} · ${mark.enclosed_element || mark.elements?.[0] || mark.strokes?.[0]?.elements?.[0] || 'PAGE'}`;
+    if(row.stroke)return 'DRAWING · PAGE';
+    if(row.copyText)return 'FULL AGENT MESSAGE';
+    return row.text;
+  }
+  function openDetail(row){
+    selectedRow=row;
+    detailDialog.showModal();
+  }
+  function selectMessage(){
+    detailField.focus();detailField.select();
   }
   const markQueue=createMarkQueue({onSettled:mark=>{
     timeline.push({kind:'stroke',t:mark.t,t_end:mark.t_end,payload:mark});
-    refreshLanes();
     rows=rows.filter(row=>!mark.strokes.slice(1).some(stroke=>row.key===stroke.id))
       .map(row=>row.key===mark.id?{...row,mark}:row);
     updateRow(mark,'SENDING');
@@ -102,7 +110,7 @@
       status='ANTHROPIC IS REASONING...';
       const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes:marks}]:bundles,current_html:currentHtml})});
       const out=await response.json();
-      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT CONFIRMED SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message});
+      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message,state:response.ok?'SENT':'PREPARED / NOT SENT'});
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
       previewHtml(out.html);timeline=[];typed='';addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
@@ -123,14 +131,13 @@
   }
   onMount(()=>{
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
-      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurn:utt=>{timeline.push({kind:'transcript',t:utt.startMs,t_end:utt.endMs,text:utt.text,words:utt.words});refreshLanes();}});
+      audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurn:utt=>{timeline.push({kind:'transcript',t:utt.startMs,t_end:utt.endMs,text:utt.text,words:utt.words});}});
       secure=window.isSecureContext;
       publishEnabled=config.publishEnabled;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
     previewHtml(currentHtml);
     fetch('/jamie-mock.html').then(r=>{if(!r.ok)throw new Error('mock unavailable');return r.text();}).then(html=>{if(!imported)previewHtml(html);}).catch(()=>{});
-    const laneTimer=setInterval(refreshLanes,500);
-    return ()=>{clearInterval(laneTimer);audio?.destroy();};
+    return ()=>{audio?.destroy();};
   });
 </script>
 
@@ -142,33 +149,34 @@
 </header>
 <main>
   <section class="pane">
-    <h3>TRANSCRIPT + SKETCH LOG // ONE CLOCK</h3>
+    <h3>SESSION // MARKS + INSTRUCTIONS</h3>
     <div id="feed" bind:this={feed}>
       {#each rows as row (row.key)}
-        {#if row.copyText}
-          <div class="message-row">
-            <div class="message-head"><span class={row.cls}>{row.text}</span><button type="button" onclick={selectMessage}>SELECT TEXT</button></div>
-            <textarea readonly value={row.copyText} aria-label={row.stroke?'Sketch receipt text':'Full agent message text'}></textarea>
-            {#if row.state==='FAILED — CLICK TO RETRY'}<button type="button" onclick={() => retry(row)}>RETRY MARK</button>{/if}
-          </div>
-        {:else if row.stroke}
-          {#if row.state==='FAILED — CLICK TO RETRY'}<button type="button" class="coord" onclick={() => retry(row)}>{row.text}</button>
-          {:else}<div class="coord">{row.text}</div>{/if}
-        {:else}
-          <div><span class="t">[{row.clock}] </span><span class={row.cls}>{row.text}</span></div>
-        {/if}
+        <button type="button" class="session-item" onclick={() => openDetail(row)}>
+          <span class:err={row.cls==='err'} class="session-title">{rowLabel(row)}</span>
+          <span class="session-meta">{row.clock}{row.state ? ` · ${row.state}` : ''}{row.copyText ? ' · VIEW FULL TEXT' : ''}</span>
+        </button>
       {/each}
     </div>
-    <Lanes data={lanesData} />
-    <div id="eqWrap"><div id="eqLabel">VOICE LEVEL</div><canvas id="eq" bind:this={eq}></canvas></div>
-    <div class="row">
-      <Button id="btnMic" disabled={!secure} variant={micOn?'recording':'default'} onclick={toggleMic}>{secure?(micOn?'MIC OFF':'MIC ON'):'MIC: HTTPS REQUIRED'}</Button>
-      <Button id="btnClear" variant="amber" onclick={clearMarks}>CLEAR MARKS</Button>
-      <Button id="btnTool" onclick={() => tool=tool==='pen'?'highlighter':'pen'}>TOOL: {tool.toUpperCase()}</Button>
+    <div id="eqWrap" class:hidden={!secure}><div id="eqLabel">VOICE LEVEL</div><canvas id="eq" bind:this={eq}></canvas></div>
+    <div class="session-actions">
+      <div class="session-tools">
+        <Button id="btnTool" onclick={() => tool=tool==='pen'?'highlighter':'pen'}>TOOL: {tool.toUpperCase()}</Button>
+        {#if secure}<Button id="btnMic" variant={micOn?'recording':'default'} onclick={toggleMic}>{micOn?'MIC OFF':'MIC ON'}</Button>{/if}
+      </div>
+      <Input id="instr" aria-label="Instruction" placeholder="Type an instruction (optional)" bind:value={typed} />
+      <Button id="btnApply" variant="amber" disabled={busy} onclick={apply}>APPLY ▸</Button>
+      <Button id="btnClear" onclick={clearMarks}>CLEAR DRAWINGS</Button>
+      {#if publishEnabled}<Button id="btnPublish" disabled={busy} onclick={publish}>PUBLISH</Button>{/if}
+      <div class="notice">{publishEnabled?'APPLY CHANGES THE PREVIEW; PUBLISH STAGES LOCALLY.':'REVIEW ONLY — APPLY SHOWS THE PREPARED MESSAGE, NOT A LIVE AGENT EDIT.'}</div>
     </div>
-    <div class="row"><Input id="instr" aria-label="Instruction" placeholder="...or type an instruction" bind:value={typed} /></div>
-    <div class="row"><Button id="btnApply" variant="amber" disabled={busy} onclick={apply}>APPLY ▸</Button><Button id="btnPublish" disabled={busy||!publishEnabled} onclick={publish}>{publishEnabled?'PUBLISH':'PUBLISH DISABLED'}</Button></div>
-    <div class="notice">{publishEnabled?'APPLY = PREVIEW ONLY. PUBLISH STAGES LOCALLY; DEPLOY IS A SEPARATE COMMAND.':'REVIEW ONLY — PUBLISH IS DISABLED.'} MIC NEEDS A SECURE ORIGIN AND REACHABLE AUDIO RELAY.</div>
   </section>
   <section class="pane"><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><form class="row" onsubmit={importUrl}><Input id="url" aria-label="Website URL" placeholder="Paste a public website URL" bind:value={url} /><Button type="submit" disabled={busy}>IMPORT URL</Button></form><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe></div></section>
 </main>
+<dialog bind:this={detailDialog} onclose={() => selectedRow=null} aria-labelledby="detail-title">
+  {#if selectedRow}
+    <div class="detail-head"><div><span class="t">{selectedRow.clock} · {selectedRow.state || 'SESSION EVENT'}</span><h2 id="detail-title">{rowLabel(selectedRow)}</h2></div><button type="button" onclick={() => detailDialog.close()} aria-label="Close full text">CLOSE</button></div>
+    <textarea bind:this={detailField} readonly value={selectedRow.copyText ?? selectedRow.text} aria-label={selectedRow.mark?'Sketch receipt text':selectedRow.copyText?'Full agent message text':'Full session event text'}></textarea>
+    <div class="detail-actions"><button type="button" onclick={selectMessage}>SELECT TEXT</button>{#if selectedRow.state==='FAILED — CLICK TO RETRY'}<button type="button" onclick={() => {retry(selectedRow);detailDialog.close();}}>RETRY MARK</button>{/if}</div>
+  {/if}
+</dialog>
