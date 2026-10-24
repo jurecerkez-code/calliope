@@ -6,7 +6,7 @@ export function describeSketch(stroke) {
   const width = Math.max(...xs) - x, height = Math.max(...ys) - y;
   const isPage = selector => /^(html|body|main)([.#:]|$)/i.test(selector);
   let targets = [...new Set((stroke.elements || pts.map(p => p.selector)).filter(s => s && !isPage(s)))];
-  let kind = stroke.tool === 'highlighter' ? 'highlight' : 'freehand';
+  let kind = 'freehand';
   const first = pts[0];
   if (kind === 'freehand') kind = recognizeShape(pts).shape;
   if (['circle', 'square', 'triangle'].includes(kind)) {

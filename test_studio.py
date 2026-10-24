@@ -59,6 +59,13 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(readback['stroke'], stroke)
 
+    def test_highlighter_payload_is_rejected(self):
+        stroke = self.stroke()
+        stroke.update(tool='highlighter', shape='highlight',
+                      style={'color': '#ffd166', 'width': 18, 'opacity': 0.45})
+        code, _ = self.post('/api/strokes', stroke)
+        self.assertEqual(code, 400)
+
     def test_shape_time_and_target_lead_agent_prompt(self):
         with patch.object(server.urllib.request, 'urlopen') as request:
             request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()

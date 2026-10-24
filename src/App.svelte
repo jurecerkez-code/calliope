@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import Loader from './Loader.svelte';
   import Button from './components/ui/button/Button.svelte';
-  import Input from './components/ui/input/Input.svelte';
   import Asterisk from './components/brand/Asterisk.svelte';
   import Timeline from './components/Timeline.svelte';
   import Icon from './components/brand/Icon.svelte';
@@ -12,18 +11,18 @@
   import { attachBoard } from './board.js';
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD, fuse } from '../extension/lib/fusion.js';
-  let feed, prev, eq, boardEl;
+  let prev, eq, boardEl;
   const STATUS = {website:'Draw where. Speak why.', canvas:'Draw the system. Name it out loud.'};
   let status = $state(STATUS.website);
-  let tool = $state('pen'), typed = $state(''), busy = $state(false), micOn = $state(false);
+  let busy = $state(false), micOn = $state(false);
   let secure = $state(false);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
-  let mode = $state('website'), said = $state(''), nodes = $state([]), edges = $state([]);
-  // The panel is one stream: spoken (or typed) turns, agent replies and problems, in order.
-  let turns = $state([]), interim = $state(''), marks = $state([]), stream = $state([]);
-  let note = $state(''), museOn = $state(false), copied = $state(false), tab = $state('interpretation'), now = $state(0), page = $state('preview');
+  let mode = $state('website'), nodes = $state([]), edges = $state([]);
+  // Spoken turns, agent replies and problems, in order.
+  let turns = $state([]), interim = $state(''), marks = $state([]), stream = $state([]), interpretationHistory = $state([]);
+  let note = $state(''), museOn = $state(false), tab = $state('interpretation'), now = $state(0), page = $state('preview');
   let audioState = $state('idle'), handCursor = 'crosshair';
-  let board = null, canvasUtts = [], nextUtt = 1, typingStart = null, museTimer = 0, applies = 0;
+  let board = null, canvasUtts = [], nextUtt = 1, museTimer = 0, applies = 0;
   let started = Date.now();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
   let timeline = [], deliveries = {}, drawing = null, audio = null;
@@ -35,13 +34,10 @@
 
   // Website fusion: each spoken "this" / "that" / "here" bound to the mark drawn nearest in time.
   const fused = $derived(fuse(turns.filter(t => t.mode === 'website'), marks));
-  const lastFused = $derived([...fused].reverse().find(u => u.target) || fused.at(-1) || null);
+  const currentInterpretations = $derived(fused.map(u => ({...u, mark: marks.find(m => m.id === u.target?.strokeId) || null})));
+  const interpretations = $derived([...interpretationHistory, ...currentInterpretations]);
   const nameOf = id => marks.find(m => m.id === id)?.name || id;
   const markOf = id => marks.find(m => m.id === id);
-  // a target only counts when the mark actually landed on an element
-  const hit = $derived(lastFused?.target?.selector ? lastFused.target : null);
-  const lastRef = $derived(lastFused?.references.find(r => r.strokeId === lastFused.target?.strokeId) || null);
-  const lastMark = $derived(lastFused?.target ? markOf(lastFused.target.strokeId) : marks.at(-1));
   // Everything that happened, newest first: what was drawn, said, pointed at, resolved, proposed.
   const events = $derived.by(() => {
     const ev = [];
@@ -54,10 +50,6 @@
     return ev.sort((a,b) => b.t - a.t);
   });
   const problems = $derived(stream.filter(i => i.kind !== 'turn'));
-  const packetJson = $derived(lastFused?.target ? JSON.stringify({
-    stroke_id: nameOf(lastFused.target.strokeId), target: lastFused.target.selector || null,
-    intent: lastFused.intent, confidence: lastFused.target.confidence, start_ms: lastFused.startMs
-  }, null, 2) : '');
   // Log lines become stream entries only when a person needs them; the rest stays quiet.
   function addLine(cls,text){
     if(cls==='err') push({kind:'error',text});
@@ -81,7 +73,7 @@
     prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'none'; form-action 'none'">`+html.slice(0,200000);
   }
   function previewLoaded(){if(!prev)return;page=(prev.contentDocument?.title||'preview').split(/[|·—-]/)[0].trim().toLowerCase()||'preview';drawing=attachDrawing(prev,{
-    tool:()=>tool,elapsed,cursor:handCursor,
+    elapsed,cursor:handCursor,
     onStart:()=>{},onMove:()=>{},
     onFinish:(stroke,payload,summary,target)=>{
       stroke.payload=payload;stroke.summary=summary;
@@ -93,14 +85,14 @@
         targets:target?[{selector:target.selector,label:target.label,tag:target.tag,confidence:target.confidence}]:[],
         pts:payload.pts.map(p=>({x:p.x,y:p.y})),stroke};
       marks=[...marks,mark];note='';
-      // an arrow from a circled/highlighted element: say where it goes
+      // An arrow from a circled element: say where it goes.
       const rel=websiteRelations(timeline.filter(e=>e.kind==='stroke').map(e=>e.payload)).find(r=>r.arrow===payload.id);
       if(rel) addLine('why',describeRelation(rel));
     }
   });}
   // Clear starts a fresh session: marks, words and the clock. The clock only resets while the mic
   // is off, because Reson8 word times are mapped onto it.
-  function clearMarks(){drawing?.clear();marks=[];note='';timeline=[];turns=turns.filter(t=>t.mode!=='website');stream=[];if(!micOn)started=Date.now();now=elapsed();}
+  function clearMarks(){drawing?.clear();marks=[];note='';timeline=[];turns=turns.filter(t=>t.mode!=='website');interpretationHistory=[];stream=[];if(!micOn)started=Date.now();now=elapsed();}
   async function toggleMic(){
     if(micOn){audio?.stop();micOn=false;interim='';audioState='idle';return;}
     try{await audio.start();micOn=true;audioState='connecting';}catch(err){audioState='error';addLine('err','Mic failed: '+err.message);}
@@ -108,15 +100,16 @@
   function summonMuse(){museOn=true;clearTimeout(museTimer);museTimer=setTimeout(()=>museOn=false,4200);}
   async function apply(){
     const bundles=buildBundles(timeline), strokes=timeline.filter(e=>e.kind==='stroke').map(e=>e.payload);
-    if(!typed && !bundles.length){addLine('err','Nothing to apply. Speak, draw or type first.');return;}
+    if(!bundles.length){addLine('err','Nothing to apply. Speak or draw first.');return;}
     if(!canApply(strokes,deliveries)){addLine('err','Retry failed strokes before apply.');return;}
     status='Reading your marks and your words…';busy=true;
     try{
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,relations:websiteRelations(strokes),current_html:currentHtml})});
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations:websiteRelations(strokes),current_html:currentHtml})});
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       push({kind:'agent',text:out.reasoning||'Done.'});
-      previewHtml(out.html);timeline=[];typed='';marks=[];turns=turns.filter(t=>t.mode!=='website');
+      interpretationHistory=[...interpretationHistory,...currentInterpretations];
+      previewHtml(out.html);timeline=[];marks=[];turns=turns.filter(t=>t.mode!=='website');
       status='Preview updated. Nothing published.';
       note=MARGINALIA[applies++%MARGINALIA.length];summonMuse();
     }catch(err){addLine('err','Apply failed: '+err.message);status='Apply failed. Try again.';}
@@ -144,7 +137,7 @@
     return id;
   };
   function onCanvasStroke(){recompute();}
-  // One utterance on the session clock, whether Reson8 heard it or someone typed it.
+  // One spoken utterance on the session clock.
   function timedUtterance(turn,source){
     let {text,startMs,endMs,words}=turn;
     if(startMs==null){ // no Reson8 timestamps: assume it was just said, at a normal pace
@@ -166,22 +159,6 @@
       turns=[...turns,{...u,mode}];push({kind:'turn',id:u.id});
     }
   }
-  function noteTyping(value){ if(value.trim()&&typingStart===null) typingStart=elapsed(); if(!value.trim()) typingStart=null; }
-  // typed words count as spoken over the time spent typing, ending now
-  function typedTurn(text){
-    const endMs=elapsed();
-    const startMs=typingStart!==null&&typingStart<endMs?typingStart:Math.max(0,endMs-text.split(/\s+/).length*MS_PER_WORD);
-    typingStart=null;
-    return {text,startMs,endMs,words:simulateWords(text,startMs,endMs)};
-  }
-  function saySimulated(){
-    const text=said.trim(); if(!text) return;
-    addTurn(typedTurn(text),'typed');said='';
-  }
-  function sayInstruction(){
-    const text=typed.trim(); if(!text) return;
-    addTurn(typedTurn(text),'typed');typed='';
-  }
   function clearCanvas(){board.clear();canvasUtts=[];nodes=[];edges=[];turns=turns.filter(t=>t.mode!=='canvas');}
   function undoCanvas(){if(board.undo())recompute();}
   const pngName=()=>'calliope-canvas-'+new Date().toISOString().replace(/[:.]/g,'-')+'.png';
@@ -200,11 +177,7 @@
     catch(_){download(blob);push({kind:'note',text:'Image clipboard blocked. PNG downloaded instead.'});}
   }
   async function downloadPng(){const blob=await board.exportPng();if(blob)download(blob);else addLine('err','Nothing drawn yet.');}
-  async function copyJson(){
-    try{await navigator.clipboard.writeText(packetJson);copied=true;setTimeout(()=>copied=false,1400);}
-    catch(err){addLine('err','Clipboard blocked: '+err.message);}
-  }
-  function setMode(m){mode=m;status=STATUS[m];}
+  function setMode(m){mode=m;tab='interpretation';status=STATUS[m];}
   // The engraved hand from the brand board, keyed off its paper: the pointer everywhere, drawing included.
   function loadHandCursor(){
     const img=new Image();img.src='/assets/muse-hand.png';
@@ -219,7 +192,7 @@
     }).catch(()=>{});
   }
   onMount(()=>{
-    board=attachBoard(boardEl,{tool:()=>tool,elapsed,onStroke:onCanvasStroke});
+    board=attachBoard(boardEl,{elapsed,onStroke:onCanvasStroke});
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
       audio=createAudio(eq,{port:config.audioPort,elapsed,
         onLine:(cls,text)=>{
@@ -237,51 +210,6 @@
   });
 </script>
 
-{#snippet steps()}
-  <ol class="steps">
-    <li class:done={lastFused}>
-      <span class="n">1</span><h3>The user said</h3>
-      <div class="card">
-        {#if lastFused}
-          <div class="said"><span class="voice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4M9 7v10M13 4v16M17 8v8M21 11v2" /></svg></span><q>{lastFused.text}</q><time>{clock(lastFused.startMs)}</time></div>
-          <dl class="kv"><dt>Intent:</dt><dd>{lastFused.intent}</dd>{#if hit}<dt>Confidence:</dt><dd>{hit.confidence.toFixed(2)}</dd>{/if}</dl>
-        {:else if interim}<p class="wait"><i>{interim}</i></p>
-        {:else}<p class="wait">Waiting for a sentence. Speak, or type one below.</p>{/if}
-      </div>
-    </li>
-    <li class:done={lastMark}>
-      <span class="n">2</span><h3>The user pointed</h3>
-      <div class="card pointed">
-        {#if lastMark}
-          {@const b = lastMark.bbox}
-          <svg class="thumb" viewBox="{b.x - 16} {b.y - 16} {b.width + 32} {b.height + 32}" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><polyline points={lastMark.pts.map(p => p.x + ',' + p.y).join(' ')} /></svg>
-          <dl class="kv"><dt>{lastMark.name}</dt><dd>({lastMark.shape})</dd><dt>bbox:</dt><dd>{b.width} × {b.height}</dd>{#if lastRef}<dt>confidence:</dt><dd>{lastRef.confidence.toFixed(2)}</dd>{/if}</dl>
-        {:else}<p class="wait">Circle, underline or point at something on the page.</p>{/if}
-      </div>
-    </li>
-    <li class:done={hit}>
-      <span class="n">3</span><h3>Target resolved</h3>
-      <div class="card">
-        {#if hit}
-          <dl class="kv"><dt>selector:</dt><dd>{hit.selector}</dd><dt>tag:</dt><dd>{(hit.tag || '—').toUpperCase()}</dd><dt>confidence:</dt><dd>{hit.confidence.toFixed(2)}</dd></dl>
-          <button class="corner" onclick={copyJson} aria-label="Copy JSON" title="Copy JSON"><Icon name="copy" size={15} /></button>
-        {:else if lastFused?.target}<p class="wait">The mark didn't land on an element. Circle a little closer.</p>
-        {:else}<p class="wait">Words and marks meet here, by time.</p>{/if}
-      </div>
-    </li>
-    <li class:done={hit}>
-      <span class="n">4</span><h3>Action suggested</h3>
-      <div class="card">
-        {#if hit}
-          <span class="pill">{lastFused.intent.toUpperCase()}</span>
-          <p class="instr">{lastFused.instruction}</p>
-        {:else}<p class="wait">Apply sends the page, your marks and your words to the agent.</p>{/if}
-        {#each problems.filter(i => i.kind === 'agent').slice(-1) as a}<p class="agent"><b>Agent</b> {a.text}</p>{/each}
-      </div>
-    </li>
-  </ol>
-{/snippet}
-
 <Loader />
 <header class="top">
   <img class="logo" src="/assets/calliope-logo.png" alt="Calliope" />
@@ -298,14 +226,9 @@
 </header>
 
 <nav class="rail" aria-label="Tools">
-  <button id="toolPen" class:on={tool==='pen'} aria-pressed={tool==='pen'} onclick={() => tool='pen'}><Icon name="pen" /><span>Draw</span></button>
-  <button id="btnTool" class:on={tool==='highlighter'} aria-pressed={tool==='highlighter'} onclick={() => tool='highlighter'}><Icon name="mark" /><span>Highlights</span></button>
+  <span class="tool-label"><Icon name="pen" /><span>Draw</span></span>
   {#if mode==='canvas'}<button id="btnUndo" onclick={undoCanvas}><Icon name="undo" /><span>Undo</span></button>{/if}
   <button id="btnClear" onclick={mode==='canvas'?clearCanvas:clearMarks}><Icon name="erase" /><span>Clear</span></button>
-  <div class="observer" aria-hidden="true">
-    <svg viewBox="0 0 60 120"><path d="M14 112c-14-30-10-70 12-96M20 20l6-6 5 8M46 104c10-24 8-52-6-74M36 100l10 6 3-10" /></svg>
-    <img src="/assets/muse-hand.png" alt="" />
-  </div>
 </nav>
 
 <main class="work" aria-label="CALLIOPE // SPEAK + DRAW ON THE WEBSITE">
@@ -319,19 +242,6 @@
     </div>
   </section>
 
-  {#if mode==='website'}
-    <section class="timeline">
-      <h2>Timeline</h2>
-      <Timeline {marks} utterances={fused} {now} {fmt} />
-      <h2 class="sub">Recent events</h2>
-      <div class="cards">
-        {#each events.slice(0, 5) as e, i (i)}
-          <div class="ev {e.kind}"><span class="ev-head"><i></i><time>{clock(e.t)}</time><b>{e.title}</b></span><span class="ev-detail">{e.detail}</span></div>
-        {:else}<p class="wait">Nothing yet. Draw on the page and say what should change.</p>{/each}
-      </div>
-    </section>
-  {/if}
-
   <footer class="foot">
     <span class="conn {audioState}"><i></i>{audioState==='live' ? 'Connected to Reson8' : audioState==='connecting' ? 'Connecting to Reson8…' : audioState==='error' ? 'Reson8 unavailable' : secure ? 'Reson8 ready' : 'Mic needs a secure origin'}</span>
     <span class="session">Session {fmt(now)}</span>
@@ -340,20 +250,27 @@
 
 <aside class="panel">
   <div class="tabs" role="tablist" aria-label="Panel">
-    {#each [['interpretation','Interpretation'],['strokes','Strokes'],['targets','Targets'],['details','Details']] as [k, label]}
-      <button role="tab" aria-selected={tab===k} onclick={() => tab=k}>{label}{#if k==='details' && problems.some(p => p.kind==='error' || p.kind==='retry')}<i class="alert"></i>{/if}</button>
+    {#each (mode==='website' ? [['interpretation','Interpretation'],['timeline','Timeline']] : [['interpretation','Interpretation']]) as [k, label]}
+      <button role="tab" aria-selected={tab===k} onclick={() => tab=k}>{label}{#if k==='interpretation' && problems.some(p => p.kind==='error' || p.kind==='retry')}<i class="alert"></i>{/if}</button>
     {/each}
   </div>
 
-  <div class="pane" bind:this={feed}>
+  <div class="pane">
     {#if tab==='interpretation'}
       {#if mode==='website'}
-        {@render steps()}
-        <h2 class="sub">Recent events</h2>
-        <ul class="events">
-          {#each events.slice(0, 4) as e, i (i)}<li class="ev {e.kind}"><i></i><time>{clock(e.t)}</time><div><b>{e.title}</b><span>{e.detail}</span></div></li>{/each}
-        </ul>
-        <p class="motto" aria-hidden="true">Human intent.<br />Machine context.</p>
+        <ol class="interpretations">
+          {#each interpretations as u (u.id)}
+            <li class="card">
+              <div class="said"><span class="voice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4M9 7v10M13 4v16M17 8v8M21 11v2" /></svg></span><q>{u.text}</q><time>{clock(u.startMs)}</time></div>
+              <dl class="kv"><dt>Intent:</dt><dd>{u.intent}</dd>
+                {#if u.mark}<dt>Pointed:</dt><dd>{u.mark.name} ({u.mark.shape})</dd>{/if}
+                {#if u.target?.selector}<dt>Target:</dt><dd>{u.target.selector}</dd><dt>Confidence:</dt><dd>{u.target.confidence.toFixed(2)}</dd>{/if}
+              </dl>
+              {#if u.target?.selector}<p class="instr">{u.instruction}</p>{/if}
+            </li>
+          {:else}<li class="wait">Waiting for a sentence. Start listening to speak.</li>{/each}
+          {#if interim}<li class="wait"><i>{interim}</i></li>{/if}
+        </ol>
       {:else}
         <ol class="steps"><li class:done={nodes.length}><span class="n">1</span><h3>The diagram so far</h3>
           <div class="card">
@@ -362,21 +279,7 @@
             {#if !nodes.length && !edges.length}<p class="wait">Boxes become nodes, lines become edges, and your words name them.</p>{/if}
           </div></li></ol>
       {/if}
-    {:else if tab==='strokes'}
-      <ul class="list">
-        {#each marks as m (m.id)}
-          <li><b>{m.name}</b><span>{m.shape} · {m.bbox.width} × {m.bbox.height} · {clock(m.startMs)}</span>
-            {#if deliveries[m.id]==='failed'}<button class="retry" onclick={() => deliver(m.stroke)}>retry</button>{/if}</li>
-        {:else}<li class="wait">No strokes yet.</li>{/each}
-      </ul>
-    {:else if tab==='targets'}
-      <ul class="list">
-        {#each marks.filter(m => m.targets.length) as m (m.id)}
-          <li><b>{m.targets[0].selector}</b><span>{m.targets[0].tag.toUpperCase()} · {m.name} · {m.targets[0].confidence.toFixed(2)}</span></li>
-        {:else}<li class="wait">No targets resolved yet.</li>{/each}
-      </ul>
-    {:else}
-      {#if packetJson}<div class="json"><div class="json-head"><b>JSON</b><button onclick={copyJson}><Icon name="copy" size={14} />{copied ? 'Copied' : 'Copy'}</button></div><pre>{packetJson}</pre></div>{/if}
+      {#if problems.length}
       <ul class="list">
         {#each problems as p (p.key)}
           <li class={p.kind}>
@@ -384,20 +287,26 @@
             {:else if p.kind==='retry'}<b>Not delivered</b><span>{p.text}</span><button class="retry" onclick={() => deliver(p.stroke)}>retry</button>
             {:else}<b>{p.kind==='agent' ? 'Agent' : p.kind==='error' ? 'Error' : 'Note'}</b><span>{p.text}</span>{/if}
           </li>
-        {:else}<li class="wait">Agent replies, staged builds and errors appear here.</li>{/each}
+        {/each}
+      </ul>
+      {/if}
+    {:else if tab==='timeline'}
+      <Timeline {marks} utterances={fused} {now} {fmt} />
+      <h2 class="sub">Recent events</h2>
+      <ul class="events">
+        {#each events as e, i (i)}<li class="ev {e.kind}"><i></i><time>{clock(e.t)}</time><div><b>{e.title}</b><span>{e.detail}</span></div></li>
+        {:else}<li class="wait">Nothing yet. Draw on the page and say what should change.</li>{/each}
       </ul>
     {/if}
   </div>
 
   <div class="compose">
     {#if mode==='website'}
-      <Input id="instr" aria-label="Instruction" placeholder="Or type what should change" bind:value={typed} oninput={() => noteTyping(typed)} onkeydown={e => {if(e.key==='Enter'){e.preventDefault();sayInstruction();}}} />
       <div class="actions">
         <Button id="btnApply" variant="primary" disabled={busy} onclick={apply}>Apply <Asterisk size={13} weight={2.6} /></Button>
         <Button id="btnPublish" variant="ghost" disabled={busy} onclick={publish}>Publish</Button>
       </div>
     {:else}
-      <Input id="said" aria-label="Type what you would say" placeholder="Or type what you would say" bind:value={said} oninput={() => noteTyping(said)} onkeydown={e => {if(e.key==='Enter'){e.preventDefault();saySimulated();}}} />
       <div class="actions">
         <Button id="btnCopyAgent" variant="primary" onclick={copyForAgent}>Copy for agent</Button>
         <Button id="btnCopyPng" variant="ghost" onclick={copyPng}>Copy PNG</Button>

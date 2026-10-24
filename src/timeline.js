@@ -1,6 +1,7 @@
 import { describeSketch } from './shape.js';
 
 export function makePayload(stroke, t_end, viewport, enclosed_element) {
+  if (stroke.tool !== 'pen') throw new Error('Only pen strokes are supported');
   const pts = stroke.pts.map(p => Object.freeze({...p, rect: p.rect && Object.freeze({...p.rect})}));
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   const bbox = {x:Math.min(...xs), y:Math.min(...ys), width:Math.max(...xs)-Math.min(...xs), height:Math.max(...ys)-Math.min(...ys)};
@@ -8,7 +9,7 @@ export function makePayload(stroke, t_end, viewport, enclosed_element) {
     id:stroke.id, tool:stroke.tool, t:stroke.t, t_end, pts, elements:[...stroke.elements],
     coordinate_space:'preview-document-css-pixels', viewport:{...viewport},
     viewBox:`0 0 ${viewport.width} ${viewport.height}`, bbox,
-    style: stroke.tool === 'pen' ? {color:'#00e05a',width:3} : {color:'#ffd166',width:18,opacity:0.45},
+    style: {color:'#00e05a',width:3},
     path:'M '+pts.map(p => `${p.x} ${p.y}`).join(' L '), enclosed_element
   };
   const summary = describeSketch(candidate);

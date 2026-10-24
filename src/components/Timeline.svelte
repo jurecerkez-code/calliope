@@ -4,7 +4,7 @@
   let { marks = [], utterances = [], now = 0, fmt } = $props();
   const STEPS = [1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000];
   const span = $derived(Math.max(10000, Math.ceil((now + 500) / 1000) * 1000));
-  const step = $derived(STEPS.find(s => span / s <= 6) || STEPS.at(-1));
+  const step = $derived(STEPS.find(s => span / s <= 3) || STEPS.at(-1));
   const ticks = $derived(Array.from({ length: Math.floor(span / step) + 1 }, (_, i) => i * step));
   const pct = ms => Math.min(100, Math.max(0, ms / span * 100));
   const refs = $derived(utterances.flatMap(u => u.references));
@@ -41,17 +41,17 @@
     <span class="name"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></svg>References</span>
     <div class="track refs">{#each refs as r, i (i)}<i class="dot" class:bound={r.strokeId} style="left:{pct(r.atMs)}%" title={r.word || 'nearest in time'}></i>{/each}</div>
   </div>
-  <i class="head" style="left:calc(110px + (100% - 110px) * {pct(now) / 100})"></i>
+  <i class="head" style="left:calc(82px + (100% - 82px) * {pct(now) / 100})"></i>
 </div>
 
 <style>
   .tl { position: relative; display: grid; gap: 4px; }
-  .axis, .lane { display: grid; grid-template-columns: 110px 1fr; align-items: center; }
+  .axis, .lane { display: grid; grid-template-columns: 82px minmax(0, 1fr); align-items: center; }
   .scale { position: relative; height: 18px; font: 11px var(--mono); color: var(--muted); }
   .scale span { position: absolute; transform: translateX(-50%); }
   .scale span:first-child { transform: none; }
-  .name { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); }
-  .name svg { width: 16px; height: 16px; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .name { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink); }
+  .name svg { width: 14px; height: 14px; flex: none; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .lane:nth-of-type(2) svg { stroke: var(--red); }
   .lane:nth-of-type(3) svg { stroke: var(--blue); }
   .lane:nth-of-type(4) svg { stroke: var(--muted); }

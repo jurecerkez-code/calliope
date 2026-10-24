@@ -3,7 +3,6 @@
 // tapering at both ends, so an arrow keeps its flick and a scribble stays a scribble.
 export const INK = {
 	pen: { color: "#FE2A00", width: 3.4 },
-	highlighter: { color: "#D69E2E", width: 18, opacity: 0.38 },
 };
 
 export function inkOutline(pts, base = INK.pen.width) {
@@ -36,6 +35,3 @@ export function inkOutline(pts, base = INK.pen.width) {
 	}
 	return "M " + left.join(" L ") + " L " + right.reverse().join(" L ") + " Z";
 }
-
-export const polyline = (pts) =>
-	"M " + pts.map((p) => `${Math.round(p.x)} ${Math.round(p.y)}`).join(" L ");

@@ -73,6 +73,6 @@ for (const [name, points] of [
   assert.equal(result.shape, 'freehand');
   assert.equal(result.enclosed_element, '');
 });
-test('highlighter stays a highlight even when looped', () => {
-  assert.equal(payload(oval(), 'highlighter').shape, 'highlight');
+test('retired highlighter cannot produce a stroke payload', () => {
+  assert.throws(() => payload(oval(), 'highlighter'), /pen strokes/);
 });

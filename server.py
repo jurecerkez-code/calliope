@@ -50,9 +50,9 @@ STROKES_LOCK = threading.Lock()
 def valid_stroke(s):
     if not isinstance(s, dict) or not isinstance(s.get('id'), str) or not re.fullmatch(r'[\w-]{1,80}', s['id']):
         return False
-    if s.get('tool') not in ('pen', 'highlighter') or not isinstance(s.get('pts'), list) or not 1 <= len(s['pts']) <= 3000:
+    if s.get('tool') != 'pen' or not isinstance(s.get('pts'), list) or not 1 <= len(s['pts']) <= 3000:
         return False
-    if 'shape' in s and s['shape'] not in ('circle', 'square', 'triangle', 'freehand', 'highlight'):
+    if 'shape' in s and s['shape'] not in ('circle', 'square', 'triangle', 'freehand'):
         return False
     if 'enclosed_element' in s and (not isinstance(s['enclosed_element'], str) or len(s['enclosed_element']) > 200 or any(ord(c) < 32 for c in s['enclosed_element'])):
         return False
@@ -62,7 +62,7 @@ def valid_stroke(s):
     if s.get('coordinate_space') != 'preview-document-css-pixels' or s.get('viewBox') != f"0 0 {viewport['width']} {viewport['height']}":
         return False
     style = s.get('style')
-    if style != ({'color': '#00e05a', 'width': 3} if s['tool'] == 'pen' else {'color': '#ffd166', 'width': 18, 'opacity': 0.45}):
+    if style != {'color': '#00e05a', 'width': 3}:
         return False
     for p in s['pts']:
         if not isinstance(p, dict) or not all(isinstance(p.get(k), (int, float)) and math.isfinite(p[k]) for k in ('x', 'y')):
@@ -132,7 +132,7 @@ def claude_apply(bundles: list, current_html: str, relations: list = None) -> di
                 ys = [p["y"] for p in pts]
                 bounds = f"x {min(xs)}–{max(xs)}, y {min(ys)}–{max(ys)}"
             shape = s.get('shape', 'unknown')
-            name = {'freehand': 'Freehand mark', 'highlight': 'Highlight',
+            name = {'freehand': 'Freehand mark',
                     'circle': 'Circle', 'square': 'Square', 'triangle': 'Triangle'}.get(shape, 'Sketch')
             utc = pts[0].get('utc', 'unknown time') if pts else 'unknown time'
             center = s.get('enclosed_element', '')
@@ -160,7 +160,7 @@ def claude_apply(bundles: list, current_html: str, relations: list = None) -> di
         'Answer as JSON: {"reasoning": "...", "html": "<!DOCTYPE html>..."}\n\n'
         "TURN TIMELINE (words + sketches, one clock):\n"
         + "\n".join(timeline_desc)
-        + ("\n\nARROWS BETWEEN MARKS (an arrow starts on a circled or highlighted element; "
+        + ("\n\nARROWS BETWEEN MARKS (an arrow starts on a circled element; "
            "where it ends says where that element should go):\n" + "\n".join(arrows)
            if (arrows := relation_lines(relations)) else "")
         + f"\n\nCURRENT HTML:\n{current_html}"

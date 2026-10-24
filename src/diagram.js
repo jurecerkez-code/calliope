@@ -57,15 +57,12 @@ export function connect(nodes, points) {
 export function classifyStrokes(strokes) {
 	return strokes.map((s) => {
 		const rec = { ...makeStroke(s.id, s.points), tool: s.tool || "pen" };
-		const recognised =
-			rec.tool === "pen" ? recognizeShape(s.points).shape : "highlight";
+		const recognised = recognizeShape(s.points).shape;
 		rec.kind =
 			NODE_SHAPES[recognised] ||
 			(rec.tool === "pen" && rec.shape === "closed-loop"
 				? "blob"
-				: recognised === "highlight"
-					? "highlight"
-					: rec.shape);
+				: rec.shape);
 		rec.tip = tipOf(rec.points);
 		return rec;
 	});
@@ -160,7 +157,7 @@ export function buildDiagram(strokes, utterances) {
 	}
 	// Edges first, so small marks next to an edge's tip can be read as its arrowhead.
 	for (const r of recs) {
-		if (owner[r.id] || r.kind === "highlight" || diag(r.bbox) <= SMALL)
+		if (owner[r.id] || diag(r.bbox) <= SMALL)
 			continue;
 		const { from, to } = connect(nodes, r.points);
 		if (from && to && from !== to) {
@@ -307,7 +304,7 @@ export function canvasPacketText(packet) {
 }
 
 // ---------- WEBSITE mode: marks on the page and arrows between them ----------
-// A circle/square/triangle, any other closed loop, or a highlight marks a DOM
+// A circle/square/triangle or any other closed loop marks a DOM
 // element ("this"). A pen stroke that starts on a mark is an arrow from it:
 //   move  - its tip lands on the page, not on another mark ("put this there")
 //   link  - its tip lands on another mark ("this goes with that")
@@ -323,7 +320,7 @@ export function websiteRelations(payloads) {
 		const points = p.pts.map((q) => ({ x: q.x, y: q.y }));
 		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
 		const target = (MARK_SHAPES.has(p.shape) && p.enclosed_element) || p.elements?.[0] || "";
-		if (MARK_SHAPES.has(p.shape) || p.tool === "highlighter" || classifyShape(points) === "closed-loop") {
+		if (MARK_SHAPES.has(p.shape) || classifyShape(points) === "closed-loop") {
 			marks.push({ id: p.id, bbox, target, shape: p.shape });
 		} else if (p.tool === "pen" && diag(bbox) > SMALL) {
 			arrows.push(p);

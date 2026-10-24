@@ -90,9 +90,9 @@ test('website: arrow from a circled element to empty space is a move', async () 
   assert.deepEqual([r.to.stroke, r.to.target, r.to.x, r.to.y], [null, 'section.stat', 700, 500]);
 });
 
-test('website: arrow between a highlight and a circle is a link; a stroke inside one mark is nothing', async () => {
+test('website: arrow between two circles is a link; a stroke inside one mark is nothing', async () => {
   const { websiteRelations } = await import('./src/diagram.js');
-  const hl = payload('h', 'highlighter', 'highlight', stroke(100, 100, 300, 100, 'h1'), { elements: ['h1'] });
+  const hl = payload('h', 'pen', 'circle', ring(200, 100, 60), { enclosed_element: 'h1' });
   const circle = payload('c', 'pen', 'circle', ring(700, 300, 60), { enclosed_element: 'section.stat' });
   const arrow = payload('x', 'pen', 'freehand', stroke(200, 100, 690, 300, 'section.stat'));
   const inside = payload('y', 'pen', 'freehand', stroke(670, 280, 730, 320, 'section.stat'));

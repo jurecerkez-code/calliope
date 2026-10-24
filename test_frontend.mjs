@@ -8,7 +8,7 @@ const pts = [[10,20], [25,30], [40,20]].map(([x,y]) => ({x,y,utc:'2026-10-24T12:
 
 test('one complete immutable stroke per timeline event, with ordered points and UTC', () => {
   const first = makePayload({id:'a', tool:'pen', t:1, pts, elements:['button#download']}, 4, {width:949,height:2862}, 'button#download');
-  const second = makePayload({id:'b', tool:'highlighter', t:5, pts, elements:['button#download']}, 8, {width:949,height:2862}, '');
+  const second = makePayload({id:'b', tool:'pen', t:5, pts, elements:['button#download']}, 8, {width:949,height:2862}, '');
   assert.equal(Object.isFrozen(first), true);
   assert.equal(Object.isFrozen(first.pts[0]), true);
   assert.equal(first.path, 'M 10 20 L 25 30 L 40 20');
@@ -37,4 +37,23 @@ test('Calliope retains its brand and staged publish control in the migrated stud
   assert.match(app, /CALLIOPE \/\/ SPEAK \+ DRAW/);
   assert.match(app, /\/api\/publish/);
   assert.match(app, />Publish</);
+});
+
+test('sidebar offers interpretation or timeline without retired controls', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /\['interpretation','Interpretation'\],\['timeline','Timeline'\]/);
+  assert.match(app, /Copy for agent/);
+  assert.doesNotMatch(app, />Strokes<|>Targets<|>Details<|Human intent\.|Machine context\.|class="observer"/);
+  assert.doesNotMatch(app, /id="btnTool"|id="instr"|id="said"|function sayInstruction|function saySimulated/);
+});
+
+test('interpretation renders every resolved turn and retains applied turns', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /#each interpretations as u \(u\.id\)/);
+  assert.match(app, /interpretationHistory=\[\.\.\.interpretationHistory,\.\.\.currentInterpretations\]/);
+  assert.doesNotMatch(app, /@render steps\(\)/);
+});
+
+test('highlighter cannot be sent as a pen stroke', () => {
+  assert.throws(() => makePayload({id:'old-tool',tool:'highlighter',t:1,pts,elements:[]}, 4, {width:949,height:2862}, ''), /pen/i);
 });

@@ -1,7 +1,7 @@
 // Blank canvas board: an SVG the user draws on directly (no website underneath).
 // Imperative like drawing.js; Svelte never re-renders the SVG's contents.
 // Styles are inline attributes so the PNG export looks the same as the screen.
-import { INK as BRAND_INK, inkOutline, polyline } from "./ink.js";
+import { INK as BRAND_INK, inkOutline } from "./ink.js";
 
 const NS = "http://www.w3.org/2000/svg";
 export const BOARD = { width: 2400, height: 1600 };
@@ -13,25 +13,9 @@ function el(tag, attrs = {}, text) {
 	if (text != null) node.textContent = text;
 	return node;
 }
-// pen strokes are filled ink outlines (see ink.js); the highlighter stays a broad stroke
-const render = (s) =>
-	s.path.setAttribute(
-		"d",
-		s.tool === "highlighter" ? polyline(s.points) : inkOutline(s.points),
-	);
-const inkAttrs = (t) =>
-	t === "highlighter"
-		? {
-				fill: "none",
-				stroke: BRAND_INK.highlighter.color,
-				"stroke-width": BRAND_INK.highlighter.width,
-				"stroke-opacity": BRAND_INK.highlighter.opacity,
-				"stroke-linecap": "round",
-				"stroke-linejoin": "round",
-			}
-		: { fill: BRAND_INK.pen.color };
+const render = (s) => s.path.setAttribute("d", inkOutline(s.points));
 
-export function attachBoard(svg, { tool, elapsed, onStroke }) {
+export function attachBoard(svg, { elapsed, onStroke }) {
 	svg.setAttribute("viewBox", `0 0 ${BOARD.width} ${BOARD.height}`);
 	svg.setAttribute("width", BOARD.width);
 	svg.setAttribute("height", BOARD.height);
@@ -78,14 +62,13 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 		try {
 			svg.setPointerCapture(e.pointerId);
 		} catch (_) {}
-		const t = tool() === "highlighter" ? "highlighter" : "pen",
-			p = point(e);
+		const p = point(e);
 		cur = {
 			id: `S${next++}`,
-			tool: t,
+			tool: "pen",
 			points: [p],
 			pointerId: e.pointerId,
-			path: el("path", inkAttrs(t)),
+			path: el("path", { fill: BRAND_INK.pen.color }),
 		};
 		render(cur);
 		ink.append(cur.path);

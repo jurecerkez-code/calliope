@@ -1,4 +1,4 @@
-import { INK, inkOutline, polyline } from "./ink.js";
+import { INK, inkOutline } from "./ink.js";
 import { describeSketch } from "./shape.js";
 import { recognizeShape } from "./shape-recognition.js";
 import { makePayload } from "./timeline.js";
@@ -53,7 +53,7 @@ function svgEl(doc, tag, attrs = {}, text) {
 // brackets, asterisk, label) fades in afterwards on a separate layer.
 export function attachDrawing(
 	iframe,
-	{ tool, elapsed, onStart, onMove, onFinish, cursor = "crosshair" },
+	{ elapsed, onStart, onMove, onFinish, cursor = "crosshair" },
 ) {
 	const doc = iframe.contentDocument;
 	if (!doc?.body) return { clear() {}, setCursor() {} };
@@ -127,44 +127,28 @@ export function attachDrawing(
 				: null,
 		};
 	};
-	const render = (s) =>
-		s.pathEl.setAttribute(
-			"d",
-			s.tool === "highlighter" ? polyline(s.pts) : inkOutline(s.pts),
-		);
+	const render = (s) => s.pathEl.setAttribute("d", inkOutline(s.pts));
 	overlay.addEventListener("pointerdown", (e) => {
 		if (cur) return;
 		try {
 			overlay.setPointerCapture(e.pointerId);
 		} catch (_) {}
 		const p = point(e),
-			selected = tool(),
 			s = sel(hit(e.clientX, e.clientY));
 		const bytes = new Uint8Array(16);
 		crypto.getRandomValues(bytes);
 		cur = {
 			id: Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""),
 			name: "stroke_" + String(++count).padStart(2, "0"),
-			tool: selected,
+			tool: "pen",
 			t: elapsed(),
 			pts: [p],
 			elements: s ? [s] : [],
 		};
-		cur.pathEl =
-			selected === "highlighter"
-				? svgEl(doc, "path", {
-						fill: "none",
-						stroke: INK.highlighter.color,
-						"stroke-width": INK.highlighter.width,
-						"stroke-opacity": INK.highlighter.opacity,
-						"stroke-linecap": "round",
-						"stroke-linejoin": "round",
-						style: "mix-blend-mode:multiply",
-					})
-				: svgEl(doc, "path", {
-						fill: INK.pen.color,
-						filter: "url(#calliope-ink)",
-					});
+		cur.pathEl = svgEl(doc, "path", {
+			fill: INK.pen.color,
+			filter: "url(#calliope-ink)",
+		});
 		render(cur);
 		ink.appendChild(cur.pathEl);
 		onStart(cur);
@@ -182,8 +166,7 @@ export function attachDrawing(
 	});
 	// What the mark most plausibly refers to. Closed shapes: the element at their centre,
 	// scored by the shape recogniser. A pen line is read by where it ends (an arrow
-	// points with its tip); a highlighter by what it covers. Either way the score is the
-	// share of the counted points on that element, reported as what it is, never as more.
+	// points with its tip). The score is the share of counted points on that element.
 	function resolveTarget(payload) {
 		const r = overlay.getBoundingClientRect(),
 			b = payload.bbox;
@@ -206,8 +189,7 @@ export function attachDrawing(
 				basis: "shape",
 			};
 		}
-		const tip = payload.tool === "pen",
-			pts = tip ? payload.pts.slice(-6) : payload.pts,
+		const pts = payload.pts.slice(-6),
 			tally = new Map();
 		for (const p of pts)
 			if (p.selector && !isPage(p.selector))
@@ -228,7 +210,7 @@ export function attachDrawing(
 					}
 				: null,
 			confidence: round2(n / pts.length),
-			basis: tip ? "tip" : "over",
+			basis: "tip",
 		};
 	}
 	function reveal(stroke, payload, target) {
