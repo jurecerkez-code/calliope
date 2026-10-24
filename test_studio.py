@@ -1,14 +1,17 @@
 """Regression checks for Calliope's drawing handoff and built studio."""
 import json
 import re
+import socket
 import threading
+import time
 import unittest
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import server
+import import_site
 
 
 class StudioTest(unittest.TestCase):
@@ -237,6 +240,97 @@ class StudioTest(unittest.TestCase):
         for path in ('/src/App.svelte', '/assets/../server.py', '/assets/%2e%2e/server.py'):
             with self.subTest(path=path), self.assertRaises(HTTPError):
                 urlopen(self.url + path)
+
+    def test_import_rejects_private_and_redirected_private_addresses(self):
+        for target in ('http://127.0.0.1/', 'http://169.254.169.254/latest/meta-data/',
+                       'file:///etc/passwd', 'http://user:pass@example.com/'):
+            with self.subTest(target=target):
+                code, _ = self.post('/api/import', {'url': target})
+                self.assertEqual(code, 400)
+        with patch.object(import_site, 'request_page', return_value=(302, {'location': 'http://127.0.0.1/private'}, b'')) as request:
+            code, _ = self.post('/api/import', {'url': 'https://example.com/'})
+        self.assertEqual(code, 400)
+        request.assert_called_once()
+
+    def test_import_returns_script_free_html_without_replacing_on_failure(self):
+        html = b'<html><head><title>Example</title></head><body><h1>Hello</h1><script>bad()</script><img src="photo.png"></body></html>'
+        with patch.object(import_site, 'request_page', return_value=(200, {'content-type': 'text/html; charset=utf-8'}, html)):
+            code, result = self.post('/api/import', {'url': 'example.com/page'})
+        self.assertEqual(code, 200)
+        self.assertIn('<base href="https://example.com/page">', result['html'])
+        self.assertIn('<h1>Hello</h1>', result['html'])
+        self.assertNotIn('<script', result['html'])
+        with patch.object(import_site, 'request_page', return_value=(200, {'content-type': 'image/png'}, b'not html')):
+            code, _ = self.post('/api/import', {'url': 'example.com/image'})
+        self.assertEqual(code, 400)
+
+    def test_import_rejects_mixed_dns_and_oversized_html(self):
+        public = (2, 1, 6, '', ('93.184.215.14', 443))
+        private = (2, 1, 6, '', ('127.0.0.1', 443))
+        with patch.object(import_site.socket, 'getaddrinfo', return_value=[public, private]), \
+             patch.object(import_site.socket, 'socket') as sock:
+            with self.assertRaisesRegex(ValueError, 'public websites'):
+                import_site.public_addresses('example.com', 443)
+        sock.assert_not_called()
+        with patch.object(import_site, 'request_page', return_value=(200, {'content-type': 'text/html'}, b'x' * (import_site.MAX_BYTES + 1))):
+            code, _ = self.post('/api/import', {'url': 'example.com'})
+        self.assertEqual(code, 400)
+
+    def test_import_has_total_deadline_even_when_server_trickles_bytes(self):
+        class SlowPage(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('content-type', 'text/html')
+                self.end_headers()
+                for _ in range(30):
+                    try:
+                        self.wfile.write(b'x')
+                        self.wfile.flush()
+                    except OSError:
+                        break
+                    time.sleep(.02)
+
+            def log_message(self, format, *args):
+                pass
+
+        source = ThreadingHTTPServer(('127.0.0.1', 0), SlowPage)
+        worker = threading.Thread(target=source.serve_forever, daemon=True)
+        worker.start()
+        address = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', source.server_port))
+        try:
+            with patch.object(import_site, 'public_addresses', return_value=[address]):
+                start = time.monotonic()
+                with self.assertRaises((TimeoutError, OSError)):
+                    import_site.request_page('http://example.com/', start + .15)
+                self.assertLess(time.monotonic() - start, .5)
+        finally:
+            source.shutdown()
+            source.server_close()
+            worker.join()
+
+    def test_import_deadline_includes_dns_resolution(self):
+        def slow_dns(*args, **kwargs):
+            time.sleep(.35)
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.215.14', 80))]
+
+        with patch.object(import_site.socket, 'getaddrinfo', side_effect=slow_dns), \
+             patch.object(import_site.socket, 'socket') as connected:
+            start = time.monotonic()
+            with self.assertRaisesRegex(TimeoutError, 'resolver timed out'):
+                import_site.request_page('http://example.com/', start + .1)
+            self.assertLess(time.monotonic() - start, .25)
+        connected.assert_not_called()
+
+    def test_import_sheds_requests_when_slots_are_full(self):
+        for _ in range(4):
+            self.assertTrue(server.IMPORT_SLOTS.acquire(blocking=False))
+        try:
+            code, result = self.post('/api/import', {'url': 'example.com'})
+            self.assertEqual(code, 429)
+            self.assertIn('too many imports', result['error'])
+        finally:
+            for _ in range(4):
+                server.IMPORT_SLOTS.release()
 
 
 if __name__ == '__main__':

@@ -10,7 +10,8 @@
   import { createAudio } from './audio.js';
   let feed, prev, eq;
   let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
-  let rows = $state([]), tool = $state('pen'), typed = $state(''), busy = $state(false), micOn = $state(false);
+  let rows = $state([]), tool = $state('pen'), typed = $state(''), url = $state(''), busy = $state(false), micOn = $state(false);
+  let imported = false;
   let secure = $state(false), publishEnabled = $state(true);
   const started = Date.now();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
@@ -52,7 +53,7 @@
   function previewHtml(html){
     currentHtml=html;
     // CSP is applied before the untrusted document; no script permission in the iframe sandbox.
-    prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'none'; form-action 'none'">`+html.slice(0,200000);
+    prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https:; img-src data: https:; font-src https:; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri https:">`+html;
   }
   function previewLoaded(){drawing=attachDrawing(prev,{
     tool:()=>tool,elapsed,
@@ -66,6 +67,21 @@
     }
   });}
   function clearMarks(){drawing?.clear();addLine('fin','MARKS CLEARED');}
+  async function importUrl(event){
+    event.preventDefault();
+    if(busy)return;
+    busy=true;status='IMPORTING WEBSITE...';
+    try{
+      const response=await fetch('/api/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})});
+      const out=await response.json();
+      if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
+      await markQueue.flush();
+      imported=true;drawing?.clear();timeline=[];deliveries={};typed='';
+      previewHtml(out.html);
+      addLine('fin','IMPORTED '+out.url);status='WEBSITE IMPORTED. DRAW OR SPEAK ON IT.';
+    }catch(err){addLine('err','IMPORT FAILED: '+err.message);status='IMPORT FAILED. PREVIEW UNCHANGED.';}
+    finally{busy=false;}
+  }
   async function toggleMic(){
     if(micOn){audio?.stop();micOn=false;return;}
     try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
@@ -108,7 +124,7 @@
       publishEnabled=config.publishEnabled;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
     previewHtml(currentHtml);
-    fetch('/jamie-mock.html').then(r=>{if(!r.ok)throw new Error('mock unavailable');return r.text();}).then(previewHtml).catch(()=>{});
+    fetch('/jamie-mock.html').then(r=>{if(!r.ok)throw new Error('mock unavailable');return r.text();}).then(html=>{if(!imported)previewHtml(html);}).catch(()=>{});
     const laneTimer=setInterval(refreshLanes,500);
     return ()=>{clearInterval(laneTimer);audio?.destroy();};
   });
@@ -143,5 +159,5 @@
     <div class="row"><Button id="btnApply" variant="amber" disabled={busy} onclick={apply}>APPLY ▸</Button><Button id="btnPublish" disabled={busy||!publishEnabled} onclick={publish}>{publishEnabled?'PUBLISH':'PUBLISH DISABLED'}</Button></div>
     <div class="notice">{publishEnabled?'APPLY = PREVIEW ONLY. PUBLISH STAGES LOCALLY; DEPLOY IS A SEPARATE COMMAND.':'REVIEW ONLY — PUBLISH IS DISABLED.'} MIC NEEDS A SECURE ORIGIN AND REACHABLE AUDIO RELAY.</div>
   </section>
-  <section class="pane"><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe></div></section>
+  <section class="pane"><h3>LIVE WEBSITE // DRAW DIRECTLY ON IT</h3><form class="row" onsubmit={importUrl}><Input id="url" aria-label="Website URL" placeholder="Paste a public website URL" bind:value={url} /><Button type="submit" disabled={busy}>IMPORT URL</Button></form><div id="prevWrap"><iframe id="prev" bind:this={prev} onload={previewLoaded} sandbox="allow-same-origin" referrerpolicy="no-referrer" title="Website preview"></iframe></div></section>
 </main>

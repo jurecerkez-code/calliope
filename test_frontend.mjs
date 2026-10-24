@@ -255,3 +255,10 @@ test('expiry sends a single mark; unrelated strokes remain separate messages', a
   await queue.flush();
   assert.deepEqual(sent.map(mark=>mark.id),['one','far','next']);
 });
+
+test('studio exposes URL import in its existing preview', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /\/api\/import/);
+  assert.match(app, /aria-label="Website URL"/);
+  assert.match(app, /previewHtml\(out\.html\)/);
+});
