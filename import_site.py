@@ -2,12 +2,17 @@
 import html
 import http.client
 import ipaddress
+import queue
 import re
 import socket
 import ssl
+import threading
+import time
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 MAX_BYTES = 200_000  # The studio sends the whole page back in its 512 KB apply request.
+IMPORT_DEADLINE = 20  # Total time for the page and all redirects, not an idle timeout.
+DNS_SLOTS = threading.BoundedSemaphore(4)
 
 
 def normalize_url(raw):
@@ -37,22 +42,43 @@ def normalize_url(raw):
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', parsed.query, ''))
 
 
-def public_addresses(host, port):
+def public_addresses(host, port, deadline=None):
+    if deadline is None:
+        deadline = time.monotonic() + IMPORT_DEADLINE
+    if not DNS_SLOTS.acquire(blocking=False):
+        raise TimeoutError('website resolver is busy')
+    result = queue.Queue(maxsize=1)
+
+    def resolve():
+        try:
+            result.put((socket.getaddrinfo(host, port, type=socket.SOCK_STREAM), None))
+        except Exception as error:
+            result.put((None, error))
+        finally:
+            DNS_SLOTS.release()
+
+    threading.Thread(target=resolve, daemon=True).start()
     try:
-        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
+        addresses, error = result.get(timeout=max(0, deadline - time.monotonic()))
+    except queue.Empty:
+        raise TimeoutError('website resolver timed out') from None
+    if isinstance(error, socket.gaierror):
         raise ValueError('could not resolve website') from None
+    if error is not None:
+        raise error
     if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
         raise ValueError('only public websites can be imported')
     return addresses
 
 
-def request_page(url):
+def request_page(url, deadline=None):
     """Connect to a validated resolved address, not a hostname resolved again later."""
+    if deadline is None:
+        deadline = time.monotonic() + IMPORT_DEADLINE
     parsed = urlsplit(url)
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == 'https' else 80)
-    addresses = public_addresses(host, port)
+    addresses = public_addresses(host, port, deadline)
 
     class PinnedConnection(http.client.HTTPConnection):
         def connect(self):
@@ -63,19 +89,39 @@ def request_page(url):
                 self.sock.connect(sockaddr)
                 if parsed.scheme == 'https':
                     self.sock = ssl.create_default_context().wrap_socket(self.sock, server_hostname=host)
+                self.active_socket = self.sock
             except BaseException:
                 self.sock.close()
                 raise
 
-    connection = PinnedConnection(host, port, timeout=12)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError('website import timed out')
+    connection = PinnedConnection(host, port, timeout=min(12, remaining))
+
+    def stop_at_deadline():
+        sock = getattr(connection, 'active_socket', None) or connection.sock
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    timer = threading.Timer(max(0, deadline - time.monotonic()), stop_at_deadline)
+    timer.daemon = True
+    timer.start()
     try:
         path = parsed.path or '/'
         if parsed.query:
             path += '?' + parsed.query
         connection.request('GET', path, headers={'User-Agent': 'Calliope URL Import', 'Accept': 'text/html'})
         response = connection.getresponse()
-        return response.status, dict(response.getheaders()), response.read(MAX_BYTES + 1)
+        body = response.read(MAX_BYTES + 1)
+        if time.monotonic() >= deadline:
+            raise TimeoutError('website import timed out')
+        return response.status, dict(response.getheaders()), body
     finally:
+        timer.cancel()
         connection.close()
 
 
@@ -95,8 +141,9 @@ def sanitize(source, url):
 
 def import_page(raw):
     url = normalize_url(raw)
+    deadline = time.monotonic() + IMPORT_DEADLINE
     for _ in range(4):
-        status, headers, body = request_page(url)
+        status, headers, body = request_page(url, deadline)
         headers = {key.lower(): value for key, value in headers.items()}
         if status in (301, 302, 303, 307, 308):
             location = headers.get('location')

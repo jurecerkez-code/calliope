@@ -16,6 +16,7 @@ Run: uv run e2e_voice_test.py   (needs .env with RESON8_API_KEY and ANTHROPIC_AP
 import asyncio
 import json
 import os
+import subprocess
 import urllib.request
 from pathlib import Path
 
@@ -84,16 +85,25 @@ async def voice_to_text() -> list:
 
 def text_to_agent(transcript: str) -> dict:
     """transcript + sketch bundle -> /api/apply -> reasoning + executed HTML"""
+    # one real payload, built by the app's own makePayload, so the backend accepts it
+    fixture = subprocess.run(
+        ["node", "stroke_fixture.mjs"], capture_output=True, text=True, cwd=HERE
+    )
+    stroke = json.loads(fixture.stdout.strip().splitlines()[-1])
+    # register the stroke with the backend first, like the app does (receipts)
+    reg = urllib.request.Request(
+        "http://127.0.0.1:8800/api/strokes",
+        data=json.dumps(stroke).encode(),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    receipt = json.load(urllib.request.urlopen(reg, timeout=30))
+    print(f"[3b] stroke receipt: {receipt}")
     bundles = [{
         "t_start": 0,
         "t_end": 3000,
         "transcript": transcript,
-        "strokes": [{
-            "t": 500,
-            "t_end": 2500,
-            "pts": [{"x": 642, "y": 184}, {"x": 800, "y": 240}],
-            "elements": ["button.btn", "h1"],
-        }],
+        "strokes": [stroke],
     }]
     req = urllib.request.Request(
         "http://127.0.0.1:8800/api/apply",

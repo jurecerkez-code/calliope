@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDiagram, buildCanvasPacket, canvasPacketText, nameFrom, edgeLabelFrom, toMermaid } from './src/diagram.js';
-import { simulateWords } from './extension/lib/fusion.js';
+import { simulateWords } from './src/lib/fusion.js';
 
 // Strokes as a person would draw them: t in ms on the session clock.
 function rect(id, x, y, w, h, t0) {

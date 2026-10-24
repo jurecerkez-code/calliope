@@ -3,8 +3,8 @@
 // "this is the API gateway" said while (or just after) drawing names the node.
 // Pure functions over plain data; no DOM.
 
-import { buildTimeline, fuse } from "../extension/lib/fusion.js";
-import { makeStroke } from "../extension/lib/strokes.js";
+import { buildTimeline, fuse } from "./lib/fusion.js";
+import { makeStroke } from "./lib/strokes.js";
 import { recognizeShape } from "./shape-recognition.js";
 
 const NEAR = 28; // px around a node that still counts as touching it
@@ -199,7 +199,7 @@ export function buildDiagram(strokes, utterances) {
 		owner[r.id] = { type: "annotation", item: a };
 	}
 
-	// Speech: bind pointing words to strokes by time (extension/lib/fusion.js), then
+	// Speech: bind pointing words to strokes by time (src/lib/fusion.js), then
 	// read names from the words that follow.
 	const fused = fuse(
 		utterances.filter((u) => u.final !== false && u.text),
