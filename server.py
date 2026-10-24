@@ -39,7 +39,8 @@ MODEL = os.environ.get("MODEL", "claude-sonnet-4-5")  # confirm exact id in the 
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
-    "&include_timestamps=true&eager_turn_probability=0.5&final_turn_probability=0.92"
+    "&include_timestamps=true&include_words=true"
+    "&eager_turn_probability=0.5&final_turn_probability=0.92"
 )
 HTTP_PORT = int(os.environ.get('HTTP_PORT', '8800'))
 AUDIO_PORT = int(os.environ.get('AUDIO_PORT', '8801'))

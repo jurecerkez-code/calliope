@@ -1,6 +1,6 @@
 {
   "private": true,
-  "scripts": {"build": "vite build", "test": "node --test test_frontend.mjs test_rough_payload.mjs test_shape_recognition.js"},
+  "scripts": {"build": "vite build", "test": "node --test test_frontend.mjs test_rough_payload.mjs test_shape_recognition.js test_diagram.mjs"},
   "dependencies": {
     "bits-ui": "^2.20.2",
     "shape-detector": "0.2.1"

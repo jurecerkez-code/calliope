@@ -1,7 +1,13 @@
+import { adaptMessage } from '../extension/lib/reson8.js';
+
 // Audio is an optional secure-origin input; only turn_end commits transcript events.
-export function createAudio(canvas, {port, onLine, onTurn}) {
+// onTurn receives {text, startMs, endMs, words:[{text,startMs,endMs}]} on the session
+// clock. Times come from the last turn_end_candidate (start_ms, duration_ms, words);
+// they are null when Reson8 sent no timestamps.
+export function createAudio(canvas, {port, onLine, onTurn, elapsed = () => 0}) {
   const ctx = canvas.getContext('2d');
   let ws=null, audioCtx=null, analyser=null, stream=null, frame=0;
+  let audioStartMs=null, lastCandidate=null; // session time of the first sample Reson8 got
   function draw() {
     frame=requestAnimationFrame(draw);
     canvas.width=canvas.clientWidth||200; canvas.height=44;
@@ -16,6 +22,12 @@ export function createAudio(canvas, {port, onLine, onTurn}) {
     }
   }
   draw();
+  function timedTurn(msg){
+    if(msg.start_ms==null||audioStartMs===null) return {text:msg.text,startMs:null,endMs:null,words:[]};
+    // turns and realtime share the timing fields, so the realtime adapter applies
+    const t=adaptMessage({...msg,type:'transcript'},audioStartMs);
+    return {text:t.text,startMs:t.startMs,endMs:t.endMs,words:t.words};
+  }
   return {
     async start() {
       if(!window.isSecureContext) throw new Error('HTTPS REQUIRED');
@@ -31,17 +43,25 @@ export function createAudio(canvas, {port, onLine, onTurn}) {
           const msg=JSON.parse(ev.data);
           if(msg.error){onLine('err','ERROR: '+msg.error);return;}
           const type=msg.type||'',text=msg.text||'';
-          if(type==='turn_end_candidate'){if(text) onLine('inter',text);return;}
-          if(type==='turn_end'){if(text){onTurn(text);onLine('fin',text);}return;}
+          if(type==='turn_end_candidate'){if(text){lastCandidate=msg;onLine('inter',text);}return;}
+          if(type==='turn_end'){
+            const cand=lastCandidate||{}, finalText=text||cand.text||'';
+            lastCandidate=null;
+            if(finalText){onTurn(timedTurn({...cand,text:finalText}));onLine('fin',finalText);}
+            return;
+          }
           if(type==='turn_start'){onLine('inter','(listening)');return;}
           if(text) onLine('inter',text);
         };
-        ws.onopen=()=>onLine('fin','RESON8 LINK UP (calliope). SPEAK.');
+        ws.onopen=()=>{audioStartMs=null;onLine('fin','RESON8 LINK UP (calliope). SPEAK.');};
         ws.onerror=()=>onLine('err','AUDIO CONNECTION FAILED');
         proc.onaudioprocess=e=>{
           if(ws?.readyState!==1)return;
           const f=e.inputBuffer.getChannelData(0),rate=audioCtx.sampleRate||16000;
           const n=rate===16000?f.length:Math.floor(f.length*16000/rate);
+          // Reson8 times count from the first sample it receives; this frame holds n
+          // samples captured before now. Approximate: latency before it is not measured.
+          if(audioStartMs===null) audioStartMs=elapsed()-n/16;
           const buf=new ArrayBuffer(n*2),dv=new DataView(buf);
           for(let i=0;i<n;i++){
             const s=rate===16000?f[i]:f[Math.floor(i*rate/16000)];
