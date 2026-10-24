@@ -401,6 +401,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class ProviderAnswerError(ValueError):
     """The provider replied, but not with an executable complete document."""
 
+class LocalAdapterError(ProviderAnswerError):
+    """A local edit adapter failure cannot be fixed by resending to the provider."""
+
 
 MAX_HTML_BYTES = 200_000
 MAX_PROVIDER_BYTES = 65_536
@@ -471,15 +474,16 @@ def pi_adapter(payload):
             cwd=HERE, env={'PATH': os.environ.get('PATH', os.defpath)},
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise ProviderAnswerError('Pi edit adapter unavailable or timed out') from e
+        raise LocalAdapterError('Pi edit adapter unavailable or timed out') from e
     if result.returncode or len(result.stdout.encode('utf-8')) > 1_500_000:
         raise ProviderAnswerError('Pi rejected the edit batch')
     try:
         output = json.loads(result.stdout)
     except (ValueError, UnicodeError) as e:
-        raise ProviderAnswerError('Invalid Pi adapter response') from e
-    if not isinstance(output, dict) or 'error' in output:
-        raise ProviderAnswerError('Invalid Pi adapter response')
+        raise LocalAdapterError('Invalid Pi adapter response') from e
+    if (not isinstance(output, dict) or 'error' in output or
+            (payload['action'] == 'edit' and ('html' not in output or 'results' not in output))):
+        raise LocalAdapterError('Invalid Pi adapter response')
     return output
 
 
@@ -601,10 +605,12 @@ def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
                 raise ProviderAnswerError('Invalid or repeated tool call id')
             call_ids.add(call['id'])
         result = pi_adapter({'action': 'edit', 'current_html': working_html, 'calls': calls})
+        if not isinstance(result, dict) or 'html' not in result or 'results' not in result:
+            raise LocalAdapterError('Invalid Pi adapter response')
         validate_document(result.get('html'))
         results = result.get('results')
         if not isinstance(results, list) or len(results) != len(calls):
-            raise ProviderAnswerError('Invalid Pi adapter results')
+            raise LocalAdapterError('Invalid Pi adapter results')
         working_html = result['html']
         edited = True
         if provider == 'claude':
@@ -827,11 +833,37 @@ class Handler(BaseHTTPRequestHandler):
                         'status': 'not_sent', 'error': 'agent key unavailable'})
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured',
                                             'agent_message': prompt})
+                # Local input/schema failures cannot improve by calling the provider again.
+                validate_document(html)
+                pi_edit_schema()
                 agent_attempted = True
-                out = {'claude': claude_apply, 'lyceum': lyceum_apply,
-                       'openrouter': openrouter_apply}[provider](bundles, html, prompt=prompt,
-                    on_response=lambda response: trace_event(session_id, 'provider_response',
-                        {'request_id': request_id, 'response': response}))
+                apply_provider = {'claude': claude_apply, 'lyceum': lyceum_apply,
+                                  'openrouter': openrouter_apply}[provider]
+                out = None
+                for attempt in range(1, 4):
+                    responses = []
+                    try:
+                        out = apply_provider(bundles, html, prompt=prompt,
+                                             on_response=responses.append)
+                    except LocalAdapterError:
+                        for response in responses:
+                            trace_event(session_id, 'provider_response',
+                                {'request_id': request_id, 'attempt': attempt, 'response': response})
+                        raise
+                    except ProviderAnswerError as error:
+                        for response in responses:
+                            trace_event(session_id, 'provider_response',
+                                {'request_id': request_id, 'attempt': attempt, 'response': response})
+                        trace_event(session_id, 'provider_attempt_failed',
+                            {'request_id': request_id, 'attempt': attempt, 'error': str(error)[:1000]})
+                        if attempt == 3:
+                            raise
+                    else:
+                        for response in responses:
+                            trace_event(session_id, 'provider_response',
+                                {'request_id': request_id, 'attempt': attempt, 'response': response})
+                        break
+                assert out is not None
                 trace_event(session_id, 'apply_result', {'request_id': request_id,
                     'status': 'succeeded', 'response': out})
                 out['agent_message'] = prompt

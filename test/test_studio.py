@@ -1,6 +1,7 @@
 """Regression checks for Calliope's drawing handoff and built studio."""
 import json
 import http.client
+from itertools import cycle
 import os
 import re
 import socket
@@ -180,7 +181,112 @@ class StudioTest(unittest.TestCase):
             events = [json.loads(line) for line in (Path(root) / 'traces' / (session + '.jsonl')).read_text().splitlines()]
             self.assertEqual(events[1]['event'], 'provider_response')
             self.assertEqual(events[1]['data']['response'], reply)
-            self.assertEqual(events[2]['data']['status'], 'failed_after_attempt')
+            self.assertEqual([e['data']['attempt'] for e in events if e['event'] == 'provider_response'], [1, 2, 3])
+            self.assertEqual(events[-1]['data']['status'], 'failed_after_attempt')
+
+    def test_provider_errors_retry_same_turn_on_selected_provider(self):
+        payload = {'bundles': [{'transcript': 'change heading', 'strokes': []}],
+                   'current_html': '<html><body><h1>Old</h1></body></html>'}
+        for provider, function in (('lyceum', 'lyceum_apply'), ('claude', 'claude_apply'),
+                                   ('openrouter', 'openrouter_apply')):
+            with self.subTest(provider=provider), patch.object(server, 'AGENT_PROVIDER', provider), \
+                 patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+                 patch.object(server, 'ANTHROPIC_KEY', 'test-only'), \
+                 patch.object(server, 'OPENROUTER_KEY', 'test-only'):
+                attempts = []
+                def flaky(bundles, html, prompt, on_response):
+                    attempts.append((bundles, html, prompt))
+                    if len(attempts) < 3:
+                        on_response({'error': 'temporary provider failure'})
+                        raise server.ProviderAnswerError('Agent request failed')
+                    return {'html': '<html><body><h1>New</h1></body></html>'}
+                with patch.object(server, function, side_effect=flaky):
+                    code, out = self.post('/api/apply', payload)
+                self.assertEqual(code, 200, out)
+                self.assertEqual(out['html'], '<html><body><h1>New</h1></body></html>')
+                self.assertEqual(len(attempts), 3)
+                self.assertEqual(attempts[0], attempts[1])
+                self.assertEqual(attempts[1], attempts[2])
+
+    def test_retry_after_partial_tool_edit_restarts_from_original_html(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        with patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), b'{malformed', tool_reply(), stop_reply('Done.')]
+            code, out = self.post('/api/apply', {'bundles': [{'transcript': 'change heading', 'strokes': []}],
+                'current_html': original})
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out['html'], original.replace('Old', 'Updated'))
+        requests = [json.loads(call.args[0].data) for call in opener.return_value.open.call_args_list]
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(requests[0]['messages'], requests[2]['messages'])
+        self.assertIn(original, requests[2]['messages'][1]['content'])
+        self.assertEqual(requests[3]['messages'][-1]['role'], 'tool')
+
+    def test_three_provider_failures_stop_and_preserve_preview_with_attempt_trace(self):
+        session = '2' * 32
+        original = '<html><body><h1>Old</h1></body></html>'
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'lyceum_apply', side_effect=server.ProviderAnswerError('incomplete edit')) as agent:
+            code, out = self.post('/api/apply', {'session_id': session, 'request_id': '3' * 32,
+                'bundles': [{'transcript': 'change heading', 'strokes': []}], 'current_html': original})
+            events = [json.loads(line) for line in (Path(root) / 'traces' / (session + '.jsonl')).read_text().splitlines()]
+        self.assertEqual(code, 502)
+        self.assertNotIn('html', out)
+        self.assertEqual(agent.call_count, 3)
+        self.assertEqual([e['data']['attempt'] for e in events if e['event'] == 'provider_attempt_failed'], [1, 2, 3])
+        self.assertEqual(events[-1]['data']['status'], 'failed_after_attempt')
+
+    def test_local_preflight_failure_never_retries_or_claims_provider_attempt(self):
+        session = '6' * 32
+        for html, failure in (('<h1>not a document</h1>', None),
+                              ('<html><body>Old</body></html>', server.ProviderAnswerError('schema unavailable'))):
+            with self.subTest(html=html), tempfile.TemporaryDirectory() as root, \
+                 patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+                 patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+                 patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+                 patch.object(server, 'pi_edit_schema', side_effect=failure) as schema, \
+                 patch.object(server, 'lyceum_apply', side_effect=server.ProviderAnswerError('schema unavailable')) as agent:
+                code, out = self.post('/api/apply', {'session_id': session, 'request_id': '7' * 32,
+                    'bundles': [], 'current_html': html})
+                events = [json.loads(line) for line in (Path(root) / 'traces' / (session + '.jsonl')).read_text().splitlines()]
+            self.assertEqual(code, 502, out)
+            self.assertEqual(agent.call_count, 0)
+            self.assertEqual(len([e for e in events if e['event'] == 'provider_attempt_failed']), 0)
+            self.assertEqual(events[-1]['data']['status'], 'not_sent')
+            self.assertEqual(schema.call_count, 0 if failure is None else 1)
+
+    def test_local_edit_adapter_timeout_after_provider_reply_does_not_retry(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        server.pi_edit_schema()
+        with patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.subprocess, 'run', side_effect=subprocess.TimeoutExpired('node', 15)) as adapter, \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = tool_reply()
+            code, out = self.post('/api/apply', {'bundles': [], 'current_html': original})
+        self.assertEqual(code, 502, out)
+        self.assertNotIn('html', out)
+        self.assertEqual(opener.return_value.open.call_count, 1)
+        self.assertEqual(adapter.call_count, 1)
+
+    def test_malformed_local_adapter_result_does_not_retry_provider(self):
+        server.pi_edit_schema()
+        with patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'pi_adapter', return_value={'results': []}) as adapter, \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = tool_reply()
+            code, out = self.post('/api/apply', {'bundles': [],
+                'current_html': '<html><body><h1>Old</h1></body></html>'})
+        self.assertEqual(code, 502, out)
+        self.assertNotIn('html', out)
+        self.assertEqual(opener.return_value.open.call_count, 1)
+        self.assertEqual(adapter.call_count, 1)
 
     def test_stroke_receipt_readback_and_apply_gate(self):
         stroke = self.stroke()
@@ -318,7 +424,8 @@ class StudioTest(unittest.TestCase):
         for item in items:
             self.assertEqual(self.post('/api/marks', item)[0], 201)
         with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply', return_value={'html': '<html></html>'}) as agent:
-            code, response = self.post('/api/apply', {'bundles': [{'strokes': items}], 'relations': [relation]})
+            code, response = self.post('/api/apply', {'bundles': [{'strokes': items}],
+                'relations': [relation], 'current_html': '<html></html>'})
             self.assertEqual(code, 200, response)
             agent.assert_called_once()
 
@@ -491,12 +598,12 @@ class StudioTest(unittest.TestCase):
         for name, replies in failures.items():
             with self.subTest(name=name), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
                  patch.object(server.urllib.request, 'build_opener') as opener:
-                opener.return_value.open.return_value.__enter__.return_value.read.side_effect = replies
+                opener.return_value.open.return_value.__enter__.return_value.read.side_effect = cycle(replies)
                 code, result = self.post('/api/apply', payload)
             self.assertEqual(code, 502, (name, result))
             self.assertNotIn('html', result)
             self.assertNotIn('PRIVATE', result['error'])
-            self.assertLessEqual(opener.return_value.open.call_count, 3)
+            self.assertLessEqual(opener.return_value.open.call_count, 9)
             self.assertEqual(payload['current_html'], original)
             self.assertEqual(server.STROKES[stroke['id']], stroke)
             self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], original, []))
@@ -595,14 +702,14 @@ class StudioTest(unittest.TestCase):
                  patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
                  patch.object(server, 'LYCEUM_KEY', 'test-lyceum'), \
                  patch.object(server.urllib.request, 'build_opener') as opener:
-                opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
-                    json.dumps(reply).encode() for reply in replies]
+                opener.return_value.open.return_value.__enter__.return_value.read.side_effect = cycle(
+                    json.dumps(reply).encode() for _ in range(3) for reply in replies)
                 code, result = self.post('/api/apply', {
                     'bundles': [], 'current_html': original})
                 self.assertEqual(code, 502, result)
                 self.assertNotIn('html', result)
                 self.assertNotIn('private', result['error'])
-                self.assertLessEqual(opener.return_value.open.call_count, 2)
+                self.assertLessEqual(opener.return_value.open.call_count, 6)
 
     def test_provider_selection_accepts_claude_only_or_lyceum_only(self):
         payload = {'bundles': [], 'current_html': '<html><h1>Old</h1></html>'}
@@ -678,12 +785,12 @@ class StudioTest(unittest.TestCase):
              patch.object(server, 'OPENROUTER_KEY', 'test-router', create=True), \
              patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
              patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
-                tool_reply(), b'{bad reply']
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = cycle([
+                tool_reply(), b'{bad reply'])
             code, result = self.post('/api/apply', {'bundles': [], 'current_html': original})
         self.assertEqual(code, 502, result)
         self.assertNotIn('html', result)
-        self.assertEqual(opener.return_value.open.call_count, 2)
+        self.assertEqual(opener.return_value.open.call_count, 6)
 
     def test_openrouter_preserves_reasoning_on_tool_followup(self):
         first = json.loads(tool_reply())
@@ -717,7 +824,7 @@ class StudioTest(unittest.TestCase):
 
     def test_pi_subprocess_is_fixed_has_no_credentials_and_fails_closed(self):
         with patch.object(server.subprocess, 'run') as run:
-            run.return_value = subprocess.CompletedProcess([], 0, stdout='{"html":"<html></html>"}', stderr='')
+            run.return_value = subprocess.CompletedProcess([], 0, stdout='{"html":"<html></html>","results":[]}', stderr='')
             server.pi_adapter({'action': 'edit', 'current_html': '<html></html>', 'calls': []})
         args, kwargs = run.call_args
         self.assertEqual(args[0], ['node', str(server.PI_ADAPTER.resolve())])
