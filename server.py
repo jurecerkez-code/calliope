@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["websockets>=12"]
 # ///
-"""Calliope server: Reson8 turns relay + Lyceum reasoning/execution loop.
+"""Calliope server: Reson8 turns relay + agent execution loop.
 
 Run:  uv run server.py          (keys read from .env next to this file)
 Open: http://127.0.0.1:8800
@@ -41,6 +41,8 @@ if _env_file.exists():
 RESON8_KEY = os.environ.get("RESON8_API_KEY", "")
 LYCEUM_KEY = os.environ.get("LYCEUM_API_KEY", "")
 MODEL = os.environ.get("MODEL", "deepseek/deepseek-v4-flash-0731")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL = "claude-haiku-5-5"
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
@@ -398,7 +400,7 @@ class ProviderAnswerError(ValueError):
 
 def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None,
                  on_response=None) -> dict:
-    """Send the exact built message; return reasoning and updated HTML."""
+    """Send the exact built message; return optional reasoning and updated HTML."""
     if prompt is None:
         prompt = build_agent_prompt(bundles, current_html)
     body = {
@@ -435,42 +437,92 @@ def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None,
         raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed provider response') from e
     if on_response:
         on_response(resp)
+    return parse_agent_answer(resp, 'Lyceum')
+
+
+def claude_apply(bundles: list, current_html: str, prompt: str | None = None,
+                 on_response=None) -> dict:
+    """Send the same prompt to Claude's Messages API, without requesting reasoning."""
+    if prompt is None:
+        prompt = build_agent_prompt(bundles, current_html)
+    req = urllib.request.Request(
+        'https://api.anthropic.com/v1/messages',
+        data=json.dumps({'model': CLAUDE_MODEL, 'max_tokens': 8192,
+                         'thinking': {'type': 'disabled'},
+                         'messages': [{'role': 'user', 'content': prompt}]}).encode(),
+        headers={'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01',
+                 'content-type': 'application/json'},
+    )
+    try:
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=120) as response:
+            raw = response.read(1_000_001)
+    except urllib.error.HTTPError as error:
+        if on_response:
+            on_response({'http_status': error.code, 'raw_text': error.read(100_000).decode('utf-8', 'replace')})
+        raise
+    if len(raw) > 1_000_000:
+        if on_response:
+            on_response({'raw_text': raw[:100_000].decode('utf-8', 'replace'), 'truncated': True})
+        raise ProviderAnswerError('Claude returned no complete HTML answer: response too large')
+    try:
+        resp = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        if on_response:
+            on_response({'raw_text': raw[:100_000].decode('utf-8', 'replace'),
+                         'truncated': len(raw) > 100_000})
+        raise ProviderAnswerError('Claude returned no complete HTML answer: malformed provider response') from e
+    if on_response:
+        on_response(resp)
+    if not isinstance(resp, dict) or not isinstance(resp.get('content'), list):
+        raise ProviderAnswerError('Claude returned no complete HTML answer: invalid response')
+    blocks = resp['content']
+    if any(not isinstance(block, dict) or block.get('type') != 'text' or
+           not isinstance(block.get('text'), str) for block in blocks):
+        raise ProviderAnswerError('Claude returned no complete HTML answer: invalid content')
+    return parse_agent_answer({'choices': [{'finish_reason':
+        'stop' if resp.get('stop_reason') == 'end_turn' else
+        'length' if resp.get('stop_reason') == 'max_tokens' else 'incomplete',
+        'message': {'content': ''.join(block['text'] for block in blocks)}}]}, 'Claude')
+
+
+def parse_agent_answer(resp: dict, provider: str) -> dict:
+    """Apply the same complete-HTML gate to either provider's text response."""
     choices = resp.get('choices') if isinstance(resp, dict) else None
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-        raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid response')
+        raise ProviderAnswerError(f'{provider} returned no complete HTML answer: invalid response')
     choice = choices[0]
     if choice.get('finish_reason') != 'stop':
         reason = 'output limit reached' if choice.get('finish_reason') == 'length' else 'generation did not finish'
-        raise ProviderAnswerError(f'Lyceum returned no complete HTML answer: {reason}')
+        raise ProviderAnswerError(f'{provider} returned no complete HTML answer: {reason}')
     message = choice.get('message')
     if not isinstance(message, dict):
-        raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid message')
+        raise ProviderAnswerError(f'{provider} returned no complete HTML answer: invalid message')
     content = message.get('content')
     if content is not None and not isinstance(content, str):
-        raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid content')
+        raise ProviderAnswerError(f'{provider} returned no complete HTML answer: invalid content')
     text = (content or '').strip()
     if not text:
-        raise ProviderAnswerError('Lyceum returned no complete HTML answer: empty answer')
+        raise ProviderAnswerError(f'{provider} returned no complete HTML answer: empty answer')
     # tolerant JSON parse: strip code fences if the model wrapped the answer
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
-        raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed JSON')
+        raise ProviderAnswerError(f'{provider} returned no complete HTML answer: malformed JSON')
     try:
         out = json.loads(m.group(0))
         if not isinstance(out, dict):
-            raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed JSON')
+            raise ProviderAnswerError(f'{provider} returned no complete HTML answer: malformed JSON')
         html = out.get("html", "")
         if not isinstance(html, str):
-            raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid HTML field')
+            raise ProviderAnswerError(f'{provider} returned no complete HTML answer: invalid HTML field')
         html = html.strip()
         if html.startswith("```"):
             html = re.sub(r"^```[a-z]*\n?|```$", "", html.strip())
         if not (re.search(r'<html(?:\s|>)', html, re.IGNORECASE) and
                 re.search(r'</html\s*>\s*\Z', html, re.IGNORECASE)):
-            raise ProviderAnswerError('Lyceum returned no complete HTML answer: incomplete HTML')
+            raise ProviderAnswerError(f'{provider} returned no complete HTML answer: incomplete HTML')
         return {"reasoning": out.get("reasoning", ""), "html": html}
     except json.JSONDecodeError as e:
-        raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed JSON') from e
+        raise ProviderAnswerError(f'{provider} returned no complete HTML answer: malformed JSON') from e
 
 
 # ---------- HTTP ----------
@@ -653,13 +705,13 @@ class Handler(BaseHTTPRequestHandler):
                 trace_event(session_id, 'apply_requested', {'request_id': request_id,
                     'bundles': bundles, 'relations': payload.get('relations', []),
                     'current_html': html, 'prompt': prompt})
-                if not LYCEUM_KEY:
+                if not ANTHROPIC_KEY and not LYCEUM_KEY:
                     trace_event(session_id, 'apply_result', {'request_id': request_id,
                         'status': 'not_sent', 'error': 'agent key unavailable'})
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured',
                                             'agent_message': prompt})
                 agent_attempted = True
-                out = lyceum_apply(bundles, html, prompt=prompt,
+                out = (claude_apply if ANTHROPIC_KEY else lyceum_apply)(bundles, html, prompt=prompt,
                     on_response=lambda response: trace_event(session_id, 'provider_response',
                         {'request_id': request_id, 'response': response}))
                 trace_event(session_id, 'apply_result', {'request_id': request_id,
@@ -739,7 +791,8 @@ async def _relay(websocket):
 async def main():
     threading.Thread(target=run_http, daemon=True).start()
     print(f"UI on http://127.0.0.1:{HTTP_PORT}  audio ws on :{AUDIO_PORT}")
-    print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  Lyceum key: {'set' if LYCEUM_KEY else 'MISSING'}")
+    provider = 'Claude' if ANTHROPIC_KEY else 'Lyceum' if LYCEUM_KEY else 'unavailable'
+    print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  Agent: {provider}")
     async with websockets.serve(audio_ws, "127.0.0.1", AUDIO_PORT, max_size=None):
         await asyncio.Future()
 
