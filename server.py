@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import websockets
+from import_site import import_page
 
 HERE = Path(__file__).parent
 DIST = HERE / 'dist'
@@ -199,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
             data = (DIST / "index.html").read_bytes()
             self.send_response(200)
             self.send_header("content-type", "text/html")
-            self.send_header("content-security-policy", "default-src 'none'; script-src 'self' 'sha256-y0joblgLTLFGhbj/xXhGS1SyGmxly/oZpyENyx9LBXI='; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-src 'self' about:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'")
+            self.send_header("content-security-policy", "default-src 'none'; script-src 'self' 'sha256-y0joblgLTLFGhbj/xXhGS1SyGmxly/oZpyENyx9LBXI='; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src https:; connect-src 'self' ws: wss:; frame-src 'self' about:; object-src 'none'; base-uri https:; form-action 'none'")
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -240,7 +241,16 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send(400, {"error": f"bad json: {e}"})
             return
-        if self.path == '/api/strokes':
+        if self.path == '/api/import':
+            try:
+                if not isinstance(payload, dict):
+                    raise ValueError('invalid import request')
+                self._send(200, import_page(payload.get('url')))
+            except ValueError as e:
+                self._send(400, {'error': str(e)})
+            except Exception:
+                self._send(502, {'error': 'could not fetch website'})
+        elif self.path == '/api/strokes':
             if not valid_stroke(payload):
                 return self._send(400, {'error': 'invalid stroke'})
             with STROKES_LOCK:

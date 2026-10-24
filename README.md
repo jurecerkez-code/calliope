@@ -66,6 +66,8 @@ uv run server.py
 
 Then open **http://127.0.0.1:8800** in Chrome, press **MIC ON**, talk while drawing on the website, press **APPLY**. Without an Anthropic key, drawing works but APPLY reports that the agent is unavailable. The browser sends each completed stroke to the backend; failed deliveries can be retried, and APPLY refuses unaccepted strokes. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
 
+To use another website as the studio canvas, paste its public URL in **Website URL** and press **IMPORT URL**. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, APPLY, and staged PUBLISH remain the studio's existing controls.
+
 > Open the app through the server URL. Opening `index.html` directly does not work: without the server there is no mic relay and no agent.
 
 ## Layout
