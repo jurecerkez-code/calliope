@@ -10,6 +10,7 @@
   let status = $state('SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.');
   let rows = $state([]), tool = $state('pen'), typed = $state(''), busy = $state(false), micOn = $state(false);
   let secure = $state(false);
+  let agentProvider = $state('agent');
   const started = Date.now();
   let currentHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;padding:48px"><h1>Your website</h1><p>Speak and draw on me to change me.</p><button style="padding:12px 20px">Click me</button></body></html>';
   let timeline = [], deliveries = {}, drawing = null, audio = null;
@@ -55,7 +56,7 @@
     const bundles=buildBundles(timeline), strokes=timeline.filter(e=>e.kind==='stroke').map(e=>e.payload);
     if(!typed && !bundles.length){addLine('err','NOTHING TO APPLY. SPEAK, DRAW OR TYPE FIRST.');return;}
     if(!canApply(strokes,deliveries)){addLine('err','RETRY FAILED STROKES BEFORE APPLY');return;}
-    status='ANTHROPIC IS REASONING...';busy=true;
+    status=agentProvider.toUpperCase()+' IS REASONING...';busy=true;
     try{
       const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes}]:bundles,current_html:currentHtml})});
       const out=await response.json();
@@ -79,6 +80,7 @@
   }
   onMount(()=>{
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
+      agentProvider=config.agentProvider || 'agent';
       audio=createAudio(eq,{port:config.audioPort,onLine:addLine,onTurn:text=>timeline.push({kind:'transcript',t:elapsed(),text})});
       secure=window.isSecureContext;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));

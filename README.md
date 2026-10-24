@@ -48,13 +48,15 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026. Team: Jure Cerkez
 Requirements: Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), Node.js with npm, and Chrome. The microphone needs a secure browser origin (localhost counts) and a reachable WebSocket audio relay.
 
 ```bash
-cp .env.example .env   # fill in RESON8_API_KEY and ANTHROPIC_API_KEY
+cp .env.example .env   # set RESON8_API_KEY and either ANTHROPIC_API_KEY or the OpenRouter options below
 npm ci
 npm run build
 uv run server.py
 ```
 
-Then open **http://127.0.0.1:8800** in Chrome, press **MIC ON**, talk while drawing on the website, press **APPLY**. Without an Anthropic key, drawing works but APPLY reports that the agent is unavailable. The browser sends each completed stroke to the backend; failed deliveries can be retried, and APPLY refuses unaccepted strokes. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
+Then open **http://127.0.0.1:8800** in Chrome, press **MIC ON**, talk while drawing on the website, press **APPLY**. Without a key for the selected agent provider, drawing works but APPLY reports that the agent is unavailable. The browser sends each completed stroke to the backend; failed deliveries can be retried, and APPLY refuses unaccepted strokes. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
+
+To use OpenRouter instead, set `AGENT_PROVIDER=openrouter` and `OPENROUTER_API_KEY` in your local `.env`, then restart the server. `OPENROUTER_MODEL` defaults to `x-ai/grok-4.20`. The existing APPLY button sends the same speech-and-drawing context and expects a **complete HTML document** back; it updates only the preview. This first slice does not include PR #4's DOM operations, URL importer, separate workspace, or browser speech path. It has not been timed against the full-page workload.
 
 > Open the app through the server URL. Opening `index.html` directly does not work: without the server there is no mic relay and no agent.
 

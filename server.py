@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["websockets>=12"]
 # ///
-"""Calliope server: Reson8 turns relay + Anthropic reasoning/execution loop.
+"""Calliope server: Reson8 turns relay + model reasoning/execution loop.
 
 Run:  uv run server.py          (keys read from .env next to this file)
 Open: http://127.0.0.1:8800
@@ -15,6 +15,7 @@ import threading
 import urllib.request
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from html.parser import HTMLParser
 from pathlib import Path
 
 import websockets
@@ -36,6 +37,9 @@ if _env_file.exists():
 RESON8_KEY = os.environ.get("RESON8_API_KEY", "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = os.environ.get("MODEL", "claude-sonnet-4-5")  # confirm exact id in the console
+AGENT_PROVIDER = os.environ.get('AGENT_PROVIDER', 'anthropic').lower()
+OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '')
+OPENROUTER_MODEL = os.environ.get('OPENROUTER_MODEL', 'x-ai/grok-4.20')
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
@@ -83,10 +87,9 @@ def valid_stroke(s):
     return s.get('bbox') == bbox
 
 
-# ---------- Anthropic: REASON about the turn, then EXECUTE the website change ----------
-def claude_apply(bundles: list, current_html: str) -> dict:
-    """bundles: [{t_start, t_end, transcript, strokes:[{t,t_end,pts,elements}]}]
-    Returns {"reasoning": str, "html": str}."""
+# ---------- REASON about the turn, then EXECUTE the website change ----------
+def build_apply_prompt(bundles: list, current_html: str) -> str:
+    """Shared studio contract: timestamped words and marks, complete updated HTML."""
     timeline_desc = []
     for b in bundles:
         timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}")
@@ -128,10 +131,14 @@ def claude_apply(bundles: list, current_html: str) -> dict:
         + "\n".join(timeline_desc)
         + f"\n\nCURRENT HTML:\n{current_html}"
     )
+    return prompt
+
+def claude_apply(bundles: list, current_html: str) -> dict:
+    """Return reasoning and full updated HTML from Anthropic."""
     body = {
         "model": MODEL,
         "max_tokens": 8192,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        "messages": [{"role": "user", "content": [{"type": "text", "text": build_apply_prompt(bundles, current_html)}]}],
     }
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
@@ -157,6 +164,50 @@ def claude_apply(bundles: list, current_html: str) -> dict:
     except json.JSONDecodeError:
         return {"reasoning": text[:400], "html": current_html}
 
+def openrouter_apply(bundles: list, current_html: str) -> dict:
+    """Use OpenRouter for the existing studio's full-HTML preview contract."""
+    body = {
+        'model': OPENROUTER_MODEL,
+        'max_tokens': 8192,
+        'messages': [
+            {'role': 'system', 'content': 'Return only a JSON object with reasoning and complete updated html fields.'},
+            {'role': 'user', 'content': build_apply_prompt(bundles, current_html)},
+        ],
+    }
+    req = urllib.request.Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=json.dumps(body).encode(),
+        headers={'Authorization': 'Bearer ' + OPENROUTER_KEY,
+                 'Content-Type': 'application/json', 'X-Title': 'Calliope'},
+    )
+    response = json.load(urllib.request.urlopen(req, timeout=120))
+    choice = response['choices'][0]
+    if choice.get('finish_reason') != 'stop':
+        raise ValueError('OpenRouter returned an incomplete edit')
+    text = choice['message']['content'].strip()
+    start = text.find('{')
+    if start < 0:
+        raise ValueError('OpenRouter did not return a JSON edit')
+    result, _ = json.JSONDecoder().raw_decode(text[start:])
+    if not isinstance(result, dict) or not isinstance(result.get('reasoning'), str) or not isinstance(result.get('html'), str):
+        raise ValueError('OpenRouter returned an invalid edit')
+    class ClosingTagParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.closed_html = False
+
+        def handle_endtag(self, tag):
+            if tag == 'html':
+                self.closed_html = True
+
+    parsed = ClosingTagParser()
+    parsed.feed(result['html'])
+    parsed.close()
+    if not re.match(r'\s*(?:<!doctype\s+html[^>]*>\s*)?<html\b', result['html'], re.I) or \
+       not re.search(r'</html>\s*$', result['html'], re.I) or not parsed.closed_html:
+        raise ValueError('OpenRouter did not return a complete HTML document')
+    return {'reasoning': result['reasoning'], 'html': result['html']}
+
 
 # ---------- HTTP ----------
 class Handler(BaseHTTPRequestHandler):
@@ -174,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/config':
-            self._send(200, {'audioPort': AUDIO_PORT})
+            self._send(200, {'audioPort': AUDIO_PORT, 'agentProvider': AGENT_PROVIDER})
         elif self.path.startswith('/assets/') and ASSET_NAME.fullmatch(self.path[len('/assets/'):]):
             file = ASSETS / self.path[len('/assets/'):]
             if not file.is_file() or file.is_symlink() or file.stat().st_size > 2_000_000 or file.resolve().parent != ASSETS.resolve():
@@ -256,13 +307,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {'stroke': stroke}) if stroke else self._send(404, {'error': 'not found'})
         elif self.path == "/api/apply":
             try:
-                if not ANTHROPIC_KEY:
+                if AGENT_PROVIDER not in ('anthropic', 'openrouter'):
+                    return self._send(503, {'error': 'Agent APPLY unavailable: invalid AGENT_PROVIDER'})
+                if not (OPENROUTER_KEY if AGENT_PROVIDER == 'openrouter' else ANTHROPIC_KEY):
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured'})
                 strokes = [s for b in payload.get('bundles', []) for s in b.get('strokes', [])]
                 with STROKES_LOCK:
                     if any(STROKES.get(s.get('id')) != s for s in strokes):
                         return self._send(409, {'error': 'stroke not accepted by backend; retry delivery'})
-                out = claude_apply(payload.get("bundles", []), payload.get("current_html", ""))
+                agent = openrouter_apply if AGENT_PROVIDER == 'openrouter' else claude_apply
+                out = agent(payload.get("bundles", []), payload.get("current_html", ""))
                 self._send(200, out)
             except Exception as e:  # surface the error to the UI, never crash the demo
                 self._send(500, {"error": str(e)})
@@ -321,7 +375,8 @@ async def _relay(websocket):
 async def main():
     threading.Thread(target=run_http, daemon=True).start()
     print(f"UI on http://127.0.0.1:{HTTP_PORT}  audio ws on :{AUDIO_PORT}")
-    print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  Anthropic key: {'set' if ANTHROPIC_KEY else 'MISSING'}")
+    agent_key = OPENROUTER_KEY if AGENT_PROVIDER == 'openrouter' else ANTHROPIC_KEY
+    print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  {AGENT_PROVIDER} key: {'set' if agent_key else 'MISSING'}")
     async with websockets.serve(audio_ws, "127.0.0.1", AUDIO_PORT, max_size=None):
         await asyncio.Future()
 
