@@ -318,7 +318,6 @@ export function websiteRelations(items) {
 	for (const item of items) {
 		const p = item.strokes ? item.strokes[0] : item;
 		if (item.shape === "x") continue;
-		const points = p.pts.map(q => ({ x: q.x, y: q.y }));
 		const bbox = { x: p.bbox.x, y: p.bbox.y, w: p.bbox.width, h: p.bbox.height };
 		const target = (MARK_SHAPES.has(p.shape) && p.enclosed_element) || p.elements?.[0] || "";
 		if (isWebsiteMark(item)) {

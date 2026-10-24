@@ -13,7 +13,8 @@
   import Icon from './components/brand/Icon.svelte';
   import Asterisk from './components/brand/Asterisk.svelte';
   import Timeline from './components/Timeline.svelte';
-  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents, speechOnlyEvents } from './modes.js';
+  import { consumeApplyStream } from './apply-stream.js';
+  import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents, speechOnlyEvents, restoreReceipts } from './modes.js';
   const DEFAULT_WEBSITE_URL = 'https://www.meetjamie.ai/';
   let feed, prev, eq, boardEl, detailDialog;
   let detailField = $state(null);
@@ -22,7 +23,7 @@
   let manualAction = $state('');
   let rows = $state([]), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
   let imported = $state(false);
-  let secure = $state(false), publishEnabled = $state(true);
+  let secure = $state(false);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
   let mode = $state('start'), operation = $state('live'), nodes = $state([]), edges = $state([]);
   let board = null, canvasUtts = [], nextUtt = 1, modeVersion = 0, speechCapture = null;
@@ -197,6 +198,8 @@
     if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
     busy=true;
     let invoked=false;
+    let originalHtml=null;
+    let selectedMarks=[];
     try{
       await markQueue.flush();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
@@ -206,40 +209,55 @@
       const speechOnly=force&&manualAction==='speech-only';
       const sent=speechOnly?speechOnlyEvents(selected):selected;
       if(!force&&!sent.some(e=>e.kind==='transcript'))return;
-      const marks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
+      selectedMarks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
       const turn=sent.find(e=>e.kind==='transcript');
       const bundle=turn ? buildBundles(sent).find(b=>b.transcript===turn.text) : buildBundles(sent)[0];
-      const bundles=bundle?[{...bundle,strokes:marks}]:[];
+      const bundles=bundle?[{...bundle,strokes:selectedMarks}]:[];
       if(!bundles.length){status='NOTHING NEW FOR THE AGENT.';return;}
-      const relations=allRelations.filter(r=>marks.some(mark=>mark.strokes.some(s=>s.id===r.from?.stroke))&&
-        marks.some(mark=>mark.id===r.arrow)).slice(0,50);
+      const relations=allRelations.filter(r=>selectedMarks.some(mark=>mark.strokes.some(s=>s.id===r.from?.stroke))&&
+        selectedMarks.some(mark=>mark.id===r.arrow)).slice(0,50);
       if(!force&&!relations.some(r=>r.kind==='move'||r.kind==='link')&&awaitingMoveArrow(sent,relations)){
-        void trace('apply_blocked',{reason:'waiting_for_arrow',turn:turn?.text,mark_ids:marks.map(mark=>mark.id)});
+        void trace('apply_blocked',{reason:'waiting_for_arrow',turn:turn?.text,mark_ids:selectedMarks.map(mark=>mark.id)});
         manualAction='speech-only';status='DRAW AN ARROW TO COMPLETE THE MOVE, OR SEND SPEECH ONLY.';return;
       }
-      await Promise.all(marks.map(mark=>pending[mark.id]));
+      await Promise.all(selectedMarks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
-      if(!canApply(marks,deliveries)){void trace('apply_blocked',{reason:'marks_not_accepted',mark_ids:marks.map(mark=>mark.id)});addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
+      if(!canApply(selectedMarks,deliveries)){void trace('apply_blocked',{reason:'marks_not_accepted',mark_ids:selectedMarks.map(mark=>mark.id)});addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
       status='AGENT IS UPDATING PREVIEW...';
       manualAction='';
       await traceQueue;
       if(traceFailed)throw new Error('SESSION TRACE UNAVAILABLE — RELOAD BEFORE SENDING');
       invoked=true;
       const requestId=cryptoId();
-      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:sessionId,request_id:requestId,bundles,relations,current_html:currentHtml})});
-      const out=await response.json();
+      originalHtml=currentHtml;
+      const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:sessionId,request_id:requestId,bundles,relations,current_html:originalHtml,stream:true})});
+      const out=await consumeApplyStream(response, html=>{
+        if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
+        previewHtml(html);
+        void trace('preview_updated',{source:'agent-partial',request_id:requestId,elapsedMs:elapsed()});
+        status='PREVIEW UPDATED · AGENT STILL WORKING...';
+      });
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
-      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT SENT'} · FULL AGENT MESSAGE`,{copyText:out.agent_message,state:response.ok?'SENT':'PREPARED / NOT SENT'});
-      if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
+      if(typeof out.agent_message==='string')addLine('coord','SENT · FULL AGENT MESSAGE',{copyText:out.agent_message,state:'SENT'});
       if(out.reasoning){addLine('why','AGENT: '+out.reasoning);lastAgent=out.reasoning;}
-      previewHtml(out.html);void trace('preview_updated',{source:'agent',request_id:requestId,elapsedMs:elapsed()});timeline=timeline.filter(e=>!sent.includes(e));
+      if(currentHtml!==out.html)previewHtml(out.html);
+      void trace('preview_updated',{source:'agent',request_id:requestId,elapsedMs:elapsed()});timeline=timeline.filter(e=>!sent.includes(e));
       providerFailed=false;
       addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
       if(!timeline.some(e=>e.kind==='transcript'&&e.mode==='live')&&timeline.some(e=>e.kind==='stroke'&&e.mode==='live'))manualAction='sketches';
       if(timeline.some(e=>e.kind==='transcript'&&e.mode==='live'))requestApply();
     }catch(err){if(mode==='website'&&operation==='live'&&modeVersion===runModeVersion){
+      if(invoked&&typeof originalHtml==='string'&&currentHtml!==originalHtml){
+        previewHtml(originalHtml);
+        void trace('preview_updated',{source:'agent-rollback',elapsedMs:elapsed()});
+      }
+      if(typeof err.agentMessage==='string')addLine('coord','PREPARED / NOT SENT · FULL AGENT MESSAGE',{copyText:err.agentMessage,state:'PREPARED / NOT SENT'});
       if(invoked){providerFailed=true;manualAction='retry';}
-      addLine('err','APPLY FAILED: '+err.message);status='APPLY FAILED. RETRY.';
+      if(err.status===409&&selectedMarks.length&&err.message.startsWith('mark not accepted by backend')){
+        await restoreReceipts(selectedMarks,deliveries,deliver);
+        status=canApply(selectedMarks,deliveries)?'MARK RECEIPT RESTORED. RETRY AGENT.':'RETRY FAILED MARKS BEFORE APPLY.';
+      }else status='APPLY FAILED. RETRY.';
+      addLine('err','APPLY FAILED: '+err.message);
     }}
     finally{busy=false;}
   }
@@ -365,7 +383,6 @@
         }
       }});
       secure=window.isSecureContext;
-      publishEnabled=config.publishEnabled;
     }).catch(()=>addLine('err','AUDIO CONFIG UNAVAILABLE'));
     loadHandCursor();
     const tick=setInterval(()=>now=elapsed(),250);
@@ -483,7 +500,7 @@
           <div class="actions"><Button id="btnCopy" variant="primary" onclick={copyArtifact}><span class="sc">COPY ARTIFACT</span></Button></div>
           <p class="fine">{sentence('RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.')}</p>
         {:else}
-          <p class="fine">{sentence('LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY.')}{#if !publishEnabled}{' '+sentence('REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED.')}{/if}</p>
+          <p class="fine">{sentence('LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY. CHANGES STAY IN THIS PREVIEW; NOTHING IS PUBLISHED.')}</p>
         {/if}
       {:else}
         <ol class="steps"><li class:done={nodes.length}><span class="n">1</span><h3>The diagram so far</h3>

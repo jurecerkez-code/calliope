@@ -16,3 +16,5 @@
 @keyframes vd-draw{to{stroke-dashoffset:0}}
 @media (max-width:760px){#vd-loader{grid-template-columns:1fr}.vd-muse{display:none}.vd-copy{padding:0 24px}}
 @media (prefers-reduced-motion:reduce){.vd-muse,.vd-mark,.vd-line{animation:none;opacity:1;transform:none}.vd-circle path{animation:none;stroke-dashoffset:0}}
+.vd-bar{position:absolute;left:15%;right:15%;bottom:56px;height:3px;border-radius:2px;background:var(--rule);overflow:hidden}
+.vd-bar i{display:block;height:100%;background:var(--accent);transition:width .35s ease}

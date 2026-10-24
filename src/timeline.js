@@ -3,6 +3,7 @@ import { bindReferences, classifyIntent, simulateWords, MS_PER_WORD, DEFAULT_WIN
 import { adaptMessage } from './lib/turn-timing.js';
 
 export function makePayload(stroke, t_end, viewport, enclosed_element) {
+  if (stroke.tool !== 'pen') throw new Error('Only pen strokes are supported');
   const pts = stroke.pts.map(p => Object.freeze({...p, rect: p.rect && Object.freeze({...p.rect})}));
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   const bbox = {x:Math.min(...xs), y:Math.min(...ys), width:Math.max(...xs)-Math.min(...xs), height:Math.max(...ys)-Math.min(...ys)};

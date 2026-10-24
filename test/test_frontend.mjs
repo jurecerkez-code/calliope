@@ -7,6 +7,18 @@ import { makeMark, createMarkQueue, MARK_SETTLE_DELAY_MS } from '../src/marks.js
 import { readFileSync } from 'node:fs';
 import { createAudio } from '../src/audio.js';
 
+test('branded loading screen finishes without the retired 3D renderer', () => {
+  const loader = readFileSync(new URL('../src/Loader.svelte', import.meta.url), 'utf8');
+  const style = readFileSync(new URL('../src/loader.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8');
+  assert.match(loader, /class="vd-muse"/);
+  assert.match(loader, /class="vd-logo"/);
+  assert.doesNotMatch(loader, /loader3d|vd3d|threeDimensional|<canvas/);
+  assert.doesNotMatch(html, /importmap|three\.module/);
+  assert.doesNotMatch(style, /perspective|rotateY|vd-3d|vd3d/);
+  assert.match(loader, /if \(t === 1\) finish\(\)/);
+});
+
 const pts = [[10,20], [25,30], [40,20]].map(([x,y]) => ({x,y,utc:'2026-10-24T12:00:00Z',selector:'button#download',text:'Download',rect:null}));
 
 test('one complete immutable stroke per timeline event, with ordered points and UTC', () => {
@@ -27,7 +39,8 @@ test('session rows open the full text on demand, separate from their compact lab
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /copyText:agentMessage/);
   assert.match(app, /copyText:out\.agent_message/);
-  assert.match(app, /state:response\.ok\?'SENT':'PREPARED \/ NOT SENT'/);
+  assert.match(app, /copyText:out\.agent_message,state:'SENT'/);
+  assert.match(app, /copyText:err\.agentMessage,state:'PREPARED \/ NOT SENT'/);
   assert.match(app, /<dialog[^>]*bind:this=\{detailDialog\}/);
   assert.match(app, /onclick=\{\(\) => openDetail\(row\)\}/);
   assert.match(app, /readonly[^>]*value=\{selectedRow\.copyText \?\? selectedRow\.text\}/);
@@ -125,7 +138,7 @@ test('audio maps stream-relative word times independently of turn start, even wi
       createScriptProcessor(){processor={connect(){}};return processor;}
       close(){}
     });
-    const audio=createAudio({getContext:()=>({fillRect(){}})},{port:8801,elapsed:()=>5000,onLine:()=>{},onEvent:(name,data)=>audioEvents.push({name,data}),onTurnStart:()=>{starts++;},onTurn:turn=>{received=turn;}});
+    const audio=createAudio({getContext:()=>({setTransform(){},clearRect(){},fillRect(){}})},{port:8801,elapsed:()=>5000,onLine:()=>{},onEvent:(name,data)=>audioEvents.push({name,data}),onTurnStart:()=>{starts++;},onTurn:turn=>{received=turn;}});
     await audio.start();socket.onopen();
     processor.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(4096)}});
     socket.onmessage({data:JSON.stringify({type:'turn_start'})});
@@ -196,7 +209,7 @@ test('Calliope retains its brand and preview controls without a publish action',
   assert.match(app, /id="btnApply"/);
   assert.doesNotMatch(app, /id="btnPublish"|\/api\/publish|async function publish\(/);
   assert.match(app, /LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY/);
-  assert.match(app, /REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED/);
+  assert.match(app, /CHANGES STAY IN THIS PREVIEW; NOTHING IS PUBLISHED/);
   assert.match(app, /ack\.agent_message/);
   assert.match(app, /AGENT SKETCH CONTEXT/);
   assert.match(app, /out\.agent_message/);
@@ -240,10 +253,11 @@ test('delivery waits for the recognition window and APPLY flushes it', async () 
 test('clearing marks drops pending delivery and removes accepted marks without deleting speech', async () => {
   const sent=[];
   const queue=createMarkQueue({onSettled:mark=>sent.push(mark),setTimer:()=>1,clearTimer:()=>{}});
-  const highlight=makePayload({id:'highlight',tool:'highlighter',t:1,pts,elements:['button#download']},4,{width:949,height:2862},'');
+  const circlePoints=Array.from({length:25},(_,i)=>({x:100+55*Math.cos(i*Math.PI/12),y:100+55*Math.sin(i*Math.PI/12),utc:'2026-10-24T12:00:00Z',selector:'button#download',rect:null}));
+  const source=makePayload({id:'source',tool:'pen',t:1,pts:circlePoints,elements:['button#download']},4,{width:949,height:2862},'button#download');
   const arrow=makePayload({id:'arrow',tool:'pen',t:5,
-    pts:[pts[0],{...pts[1],x:200,y:100},{...pts[2],x:400,y:120}],elements:['button#download']},8,{width:949,height:2862},'');
-  const mark=makeMark([highlight]), direction=makeMark([arrow]);
+    pts:[{...pts[0],x:155,y:100},{...pts[1],x:200,y:100},{...pts[2],x:400,y:120}],elements:['button#download']},8,{width:949,height:2862},'');
+  const mark=makeMark([source]), direction=makeMark([arrow]);
   queue.add(arrow);
   queue.clear();
   await queue.flush();
@@ -301,7 +315,9 @@ test('studio exposes URL import in its existing preview', () => {
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /\/api\/import/);
   assert.match(app, /aria-label="Website URL"/);
-  assert.match(app, /previewHtml\(out\.html\)/);
+  assert.match(app, /consumeApplyStream\(response/);
+  assert.match(app, /previewHtml\(html\)/);
+  assert.match(app, /previewHtml\(originalHtml\)/);
 });
 
 test('both studio surfaces draw pen only, without a tool switch', () => {
@@ -418,7 +434,9 @@ test('the live studio triggers turn-scoped execution and waits for an active str
   assert.match(app,/speechCapture=\{mode,operation\}/);
   assert.match(app,/nextLiveEvents\(live,allRelations\)/);
   assert.match(app,/strokeWaiters\.push\(resolve\)/);
-  assert.match(app,/canApply\(marks,deliveries\)/);
+  assert.match(app,/canApply\(selectedMarks,deliveries\)/);
+  assert.match(app,/err\.status===409.*selectedMarks\.length/);
+  assert.match(app,/restoreReceipts\(selectedMarks,deliveries,deliver\)/);
   assert.match(app,/if\(!force&&!sent\.some\(e=>e\.kind==='transcript'\)\)return/);
   assert.match(app,/speechOnly\?speechOnlyEvents\(selected\):selected/);
   assert.match(app,/if\(traceFailed\)throw new Error\('SESSION TRACE UNAVAILABLE/);
@@ -444,6 +462,19 @@ test('speech-only escape submits a turn without its unfinished source mark', asy
   const sent=speechOnlyEvents(selected);
   assert.deepEqual(sent,[turn]);
   assert.deepEqual(timeline.filter(e=>!sent.includes(e)),[source]);
+});
+
+test('expired receipts are resent before retrying the same Live turn', async () => {
+  const { restoreReceipts } = await import('../src/modes.js');
+  const marks=[{id:'first'},{id:'second'}], deliveries={first:'accepted',second:'accepted'};
+  const sent=[];
+  await restoreReceipts(marks,deliveries,async mark=>{
+    assert.equal(deliveries[mark.id],'failed');
+    sent.push(mark.id);
+    deliveries[mark.id]='accepted';
+  });
+  assert.deepEqual(sent,['first','second']);
+  assert.deepEqual(deliveries,{first:'accepted',second:'accepted'});
 });
 
 test('studio has no text instruction entry; mode events remain separate', async () => {
@@ -501,5 +532,5 @@ test('a live move waits for its arrow without consuming a circled source at the 
   assert.match(app, /manualAction='speech-only'/);
   assert.match(app, /manualAction='sketches'/);
   assert.doesNotMatch(app, />APPLY ▸<\/Button>/);
-  assert.match(app,/JSON\.stringify\(\{session_id:sessionId,request_id:requestId,bundles,relations,current_html:currentHtml\}\)/);
+  assert.match(app,/JSON\.stringify\(\{session_id:sessionId,request_id:requestId,bundles,relations,current_html:originalHtml,stream:true\}\)/);
 });

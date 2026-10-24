@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { adapt, MAX_HTML_BYTES } from '../pi_edit_adapter.mjs';
 
 const original = '<!DOCTYPE html><html><body><h1>Old</h1><p>Keep</p></body></html>';
@@ -63,4 +64,35 @@ test('Unicode, BOM and CRLF survive exact edits; mixed newline normalization fai
 test('a late failing call returns no partially edited document; next request starts fresh', async () => {
   await assert.rejects(apply([call([edit()]), call([edit('missing')])]), /missing/);
   assert.equal((await apply([call([edit()])])).html, original.replace('Old', 'Updated'));
+});
+
+test('safe missing batch has only a typed, content-free subprocess receipt', () => {
+  const child = spawnSync(process.execPath, ['pi_edit_adapter.mjs'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8',
+    input: JSON.stringify({action: 'edit', current_html: original,
+      calls: [call([edit()]), call([edit('private missing')])]}),
+  });
+  assert.equal(child.status, 0, child.stdout);
+  assert.deepEqual(JSON.parse(child.stdout), {retryable_error: 'exact_span_missing'});
+  assert.equal(child.stderr, '');
+});
+
+test('unsafe batch is rejected regardless of missing-span order', () => {
+  const page = original.replace('Keep', 'Old');
+  for (const calls of [
+    [call([edit('absent'), edit('Old')])], [call([edit('Old'), edit('absent')])],
+    [call([edit('absent')]), call([edit('Old')])],
+    [call([edit('Old')]), call([edit('absent')])],
+    [call([edit('absent')]), call([edit()], '../server.py')],
+    [call([edit()], '../server.py'), call([edit('absent')])],
+    [call([edit('absent')]), call([edit('Old', 'x'.repeat(16_384))])],
+    [call([edit('Old', 'x'.repeat(16_384))]), call([edit('absent')])],
+  ]) {
+    const child = spawnSync(process.execPath, ['pi_edit_adapter.mjs'], {
+      cwd: new URL('..', import.meta.url), encoding: 'utf8',
+      input: JSON.stringify({action: 'edit', current_html: page, calls}),
+    });
+    assert.equal(child.status, 1, child.stdout);
+    assert.deepEqual(JSON.parse(child.stdout), {error: 'Pi rejected the edit batch'});
+  }
 });

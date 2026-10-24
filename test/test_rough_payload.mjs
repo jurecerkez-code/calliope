@@ -73,6 +73,9 @@ for (const [name, points] of [
   assert.equal(result.shape, 'freehand');
   assert.equal(result.enclosed_element, '');
 });
+test('retired highlighter cannot produce a stroke payload', () => {
+  assert.throws(() => makePayload({id:'old',tool:'highlighter',t:1,pts:[{x:1,y:1}],elements:[]},2,{width:300,height:200},''), /pen strokes/);
+});
 for (const [name, from, to, direction, angle] of [
   ['horizontal', [10, 40], [210, 40], 'horizontal', 0],
   ['vertical', [40, 210], [40, 10], 'vertical', 90],
