@@ -268,6 +268,63 @@ test('startup offers website import or a blank canvas without loading a demo sit
   assert.match(app, /mode = \$state\('start'\)/);
   assert.match(app, /START BLANK CANVAS/);
   assert.match(app, /IMPORT WEBSITE/);
-  assert.match(app, /mode='website';drawing\?\.clear\(\)/);
+  assert.match(app, /mode='website';modeVersion\+\+;drawing\?\.clear\(\)/);
   assert.doesNotMatch(app, /fetch\('\/jamie-mock\.html'\)/);
+});
+
+test('recording artifact keeps words and marks on one clock, as markdown plus JSON', async () => {
+  const { buildArtifact } = await import('./src/modes.js');
+  assert.equal(buildArtifact([]), '');
+  const stroke = makePayload({id:'s1', tool:'pen', t:2500, pts, elements:['button#download']}, 3100, {width:949,height:2862}, '');
+  const mark = makeMark([stroke]);
+  const text = buildArtifact([
+    {kind:'transcript', t:2000, text:'make this button green'},
+    {kind:'stroke', t:2500, t_end:3100, payload:mark}
+  ], {page:'Demo', startedAt:'2026-10-24T12:00:00.000Z'});
+  assert.match(text, /^# Calliope recording/);
+  assert.match(text, /## \[00:02\] make this button green/);
+  assert.match(text, /- \[00:02-00:03\] freehand mark \(1 path\):/);
+  assert.match(text, /pen freehand, x 10-40, y 20-30, over button#download/);
+  const json = JSON.parse(text.split('```json\n')[1].split('\n```')[0]);
+  assert.equal(json.bundles[0].marks[0].strokes[0].path, 'M 10 20 L 25 30 L 40 20');
+  assert.equal(json.bundles[0].marks[0].strokes[0].pts, undefined);
+});
+
+test('live queue never runs two agent calls at once and re-runs once for requests made mid-flight', async () => {
+  const { createLiveQueue } = await import('./src/modes.js');
+  let calls = 0, active = 0, maxActive = 0, release;
+  const request = createLiveQueue(async () => {
+    calls++; active++; maxActive = Math.max(maxActive, active);
+    await new Promise(r => { release = r; });
+    active--;
+  });
+  const first = request();
+  request(); request();
+  release(); await new Promise(r => setTimeout(r));
+  release(); await first;
+  assert.equal(calls, 2);
+  assert.equal(maxActive, 1);
+});
+
+test('studio offers a recording/live toggle', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /role="radiogroup"/);
+  assert.match(app, /COPY ARTIFACT/);
+  assert.match(app, /if\(operation==='live'\)requestApply\(\)/);
+});
+
+test('studio has no text instruction entry; mode events remain separate', async () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /\btyped\b|saySimulated|id="instr"|id="said"|type a note|type an instruction/);
+  assert.match(app, /modeVersion!==runModeVersion/);
+  assert.match(app, /strokeModes\.set\(stroke\.id,operation\)/);
+  assert.match(app, /kind:'stroke',mode:markMode/);
+  assert.match(app, /if\(markMode==='live'&&mode==='website'&&operation==='live'\)return deliver\(mark\)/);
+  const { eventsForMode } = await import('./src/modes.js');
+  const live = {kind:'transcript',mode:'live',t:1,text:'change the page'};
+  const recording = {kind:'transcript',mode:'recording',t:2,text:'just record this'};
+  const events = [live, recording];
+  assert.deepEqual(eventsForMode(events,'live'), [live]);
+  assert.deepEqual(eventsForMode(events,'recording'), [recording]);
+  assert.equal(events.length, 2);
 });
