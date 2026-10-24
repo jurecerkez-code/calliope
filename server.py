@@ -39,7 +39,7 @@ MODEL = os.environ.get("MODEL", "claude-sonnet-4-5")  # confirm exact id in the 
 RESON8_TURNS = (
     "wss://api.reson8.dev/v1/speech-to-text/turns"
     "?encoding=pcm_s16le&sample_rate=16000&channels=1&language=en"
-    "&include_timestamps=true&eager_turn_probability=0.5&final_turn_probability=0.92"
+    "&include_timestamps=true&include_words=true&eager_turn_probability=0.5&final_turn_probability=0.92"
 )
 HTTP_PORT = int(os.environ.get('HTTP_PORT', '8800'))
 AUDIO_PORT = int(os.environ.get('AUDIO_PORT', '8801'))
@@ -89,7 +89,8 @@ def claude_apply(bundles: list, current_html: str) -> dict:
     Returns {"reasoning": str, "html": str}."""
     timeline_desc = []
     for b in bundles:
-        timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}")
+        intent = f" (intent: {b['intent']})" if b.get("intent") else ""
+        timeline_desc.append(f"[{b.get('t_start', 0)}-{b.get('t_end', 0)}ms] SAID: {b.get('transcript', '')}{intent}")
         for s in b.get("strokes", []):
             pts = s.get("pts", [])
             bounds = "unknown"
@@ -114,10 +115,15 @@ def claude_apply(bundles: list, current_html: str) -> dict:
                                 f"<path d=\"{s.get('path', '')}\" fill=\"none\" /></svg>; "
                                 f"point-level JSON: {json.dumps(s, separators=(',', ':'))}")
             timeline_desc.append(description)
+        for r in b.get("references", []):
+            word = f'"{r.get("word", "")}"' if r.get("word") else "(no pointing word)"
+            timeline_desc.append(f"[{r.get('atMs', 0)}ms] REFERENCE {word} -> {r.get('strokeId') or 'no sketch'}")
     prompt = (
         "You are a web design agent in a live meeting. The user SPEAKS while DRAWING on top "
         "of a website. Each transcript chunk carries the sketches drawn in the SAME PERIOD. "
         "Each sketch is summarized as a tentative shape, UTC timestamp, page coordinates and DOM target. "
+        "REFERENCE lines bind spoken pointing words (this/that/here) to the sketch they refer to; "
+        "trust a REFERENCE over your own guess of which mark matters. "
         "A shape is not a command. Infer the requested change from the spoken words too.\n\n"
         "REASON FIRST: one short paragraph. What does the user want changed, combining words "
         "and sketches? Note conflicts between words and marks explicitly.\n"

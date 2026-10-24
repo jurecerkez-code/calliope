@@ -98,7 +98,7 @@ const INTENT_RULES = [
 	],
 	[
 		"move",
-		/\b(move|shift|drag|swap|reorder|relocate)\b|\b(?:put|place) (?:this|that|these|those|it)\b/,
+		/\b(move|shift|drag|swap|reorder|relocate)\b|\b(?:put|place) (?:this|that|these|those|it|the(?! new\b))\b/,
 	],
 	[
 		"add",
