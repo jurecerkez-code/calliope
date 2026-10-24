@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDiagram, buildCanvasPacket, canvasPacketText, nameFrom, edgeLabelFrom, toMermaid } from '../src/diagram.js';
+import { buildDiagram, buildCanvasPacket, canvasPacketText, classifyStrokes, nameFrom, edgeLabelFrom, toMermaid } from '../src/diagram.js';
 import { simulateWords } from '../src/lib/fusion.js';
 import { makePayload } from '../src/timeline.js';
 
@@ -57,8 +57,58 @@ test('shapes become nodes, a stroke between them an edge, speech names them', ()
 test('a stroke that does not connect two nodes stays an annotation', () => {
   const d = buildDiagram([rect('S1', 100, 100, 200, 100, 0), line('S2', 150, 260, 260, 262, 2000)], []);
   assert.equal(d.edges.length, 0);
-  assert.equal(d.annotations[0].kind, 'underline');
+  assert.equal(d.annotations[0].kind, 'line');
   assert.equal(d.annotations[0].node, null);
+});
+
+test('canvas and website give identical stroke shape labels without losing input points', () => {
+  const openLoop = { id: 'S3', tool: 'pen', points: [[20,20],[100,20],[100,80],[20,80],[20,60]]
+    .map(([x,y],i) => ({x,y,t:3000+i*15})) };
+  const strokes = [rect('S1', 100, 100, 200, 100, 1000),
+    line('S2', 150, 260, 260, 262, 2000), openLoop];
+  const before = structuredClone(strokes);
+  const classified = classifyStrokes(strokes);
+  for (const [i, s] of strokes.entries()) {
+    const payload = makePayload({id:s.id,tool:s.tool,t:s.points[0].t,
+      pts:s.points.map(p=>({...p,utc:'2026-10-24T12:00:00Z',selector:'',text:'',rect:null})),
+      elements:[]},s.points.at(-1).t,{width:2400,height:1600},'');
+    assert.equal(classified[i].shape, payload.shape, s.id);
+    assert.deepEqual(payload.pts.map(({x,y,t})=>({x,y,t})),s.points, `${s.id} website points`);
+    const rounded = ({x,y,t})=>({x:Math.round(x*10)/10,y:Math.round(y*10)/10,t});
+    assert.deepEqual(classified[i].points[0],rounded(s.points[0]), `${s.id} canvas start`);
+    assert.deepEqual(classified[i].points.at(-1),rounded(s.points.at(-1)), `${s.id} canvas end`);
+  }
+  assert.deepEqual(classified.map(r=>r.kind), ['box','line','freehand']);
+  assert.equal(buildDiagram(strokes, []).nodes.length, 1, 'unrecognized loop is not a node');
+  assert.deepEqual(strokes,before);
+});
+
+test('an unrecognized loop crossing two nodes remains an annotation, not an edge', () => {
+  const loop = {id:'S3',tool:'pen',points:[[180,150],[350,150],[350,200],[180,200],[180,180]]
+    .map(([x,y],i)=>({x,y,t:3000+i*15}))};
+  const d=buildDiagram([rect('S1',100,100,120,100,1000),rect('S2',300,100,120,100,2000),loop],[]);
+  assert.equal(d.recs[2].shape,'freehand');
+  assert.equal(d.nodes.length,2);
+  assert.equal(d.edges.length,0);
+  assert.equal(d.annotations[0].strokeId,'S3');
+});
+
+test('an open curved arrow between nodes can still become an edge', () => {
+  const arrow = {id:'S3',tool:'pen',points:[[180,150],[230,115],[280,110],[350,150]]
+    .map(([x,y],i)=>({x,y,t:3000+i*15}))};
+  const d=buildDiagram([rect('S1',100,100,120,100,1000),rect('S2',300,100,120,100,2000),arrow],[]);
+  assert.equal(d.recs[2].shape,'freehand');
+  assert.deepEqual(d.edges.map(e=>[e.from,e.to]),[['N1','N2']]);
+});
+
+test('a dense zigzag cannot become an edge when simplification hides its detours', () => {
+  const zigzag = {id:'S3',tool:'pen',points:Array.from({length:113},(_,i)=>({
+    x:180+i*170/112,y:150+(i===0||i===112?0:i%2?1.4:-1.4),t:3000+i*15
+  }))};
+  const d=buildDiagram([rect('S1',100,100,120,100,1000),rect('S2',300,100,120,100,2000),zigzag],[]);
+  assert.equal(d.recs[2].shape,'freehand');
+  assert.equal(d.edges.length,0);
+  assert.equal(d.annotations[0].strokeId,'S3');
 });
 
 test('packet text carries mermaid and parseable JSON', () => {
