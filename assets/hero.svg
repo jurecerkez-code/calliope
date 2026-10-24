@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420" font-family="ui-monospace, Consolas, monospace">
+  <defs>
+    <pattern id="g" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#12251c"/>
+    </pattern>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#37ff8b"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="1198" height="418" rx="16" fill="#060807" stroke="#16302a" stroke-width="2"/>
+  <rect x="1" y="1" width="1198" height="418" rx="16" fill="url(#g)"/>
+  <path d="M28 56 V28 H56 M1144 28 H1172 V56 M28 364 V392 H56 M1144 392 H1172 V364" stroke="#37ff8b" stroke-width="3" fill="none"/>
+
+  <text x="60" y="150" font-size="66" font-weight="bold" fill="#37ff8b">VOICE-DRAW</text>
+  <text x="60" y="204" font-size="26" fill="#c8ffd8">speak + draw on the website. it changes live.</text>
+  <text x="60" y="248" font-size="18" fill="#6f8f84">the agent reads your words and your marks together,</text>
+  <text x="60" y="274" font-size="18" fill="#6f8f84">then rebuilds the page while the meeting keeps going.</text>
+
+  <text x="60" y="322" font-size="13" fill="#6f8f84">VOICE IN</text>
+  <g fill="#37ff8b">
+    <rect x="70" y="342" width="8" height="12"/><rect x="84" y="336" width="8" height="24"/>
+    <rect x="98" y="328" width="8" height="40"/><rect x="112" y="318" width="8" height="60"/>
+    <rect x="126" y="330" width="8" height="36"/><rect x="140" y="340" width="8" height="16"/>
+    <rect x="154" y="322" width="8" height="52"/><rect x="168" y="312" width="8" height="72"/>
+    <rect x="182" y="326" width="8" height="44"/><rect x="196" y="338" width="8" height="20"/>
+    <rect x="210" y="344" width="8" height="10"/><rect x="224" y="332" width="8" height="32"/>
+    <rect x="238" y="320" width="8" height="56"/><rect x="252" y="330" width="8" height="36"/>
+    <rect x="266" y="340" width="8" height="16"/><rect x="280" y="346" width="8" height="8"/>
+    <rect x="294" y="334" width="8" height="28"/><rect x="308" y="324" width="8" height="48"/>
+    <rect x="322" y="336" width="8" height="24"/><rect x="336" y="342" width="8" height="12"/>
+    <rect x="350" y="338" width="8" height="20"/><rect x="364" y="344" width="8" height="10"/>
+  </g>
+
+  <path d="M560 240 H604" stroke="#37ff8b" stroke-width="3" marker-end="url(#ar)"/>
+
+  <g>
+    <rect x="620" y="60" width="520" height="300" rx="12" fill="#0a0d0c" stroke="#16302a" stroke-width="2"/>
+    <path d="M620 72 a12 12 0 0 1 12 -12 h496 a12 12 0 0 1 12 12 v26 h-520 z" fill="#0d1412"/>
+    <circle cx="650" cy="79" r="6" fill="#16302a"/><circle cx="672" cy="79" r="6" fill="#16302a"/><circle cx="694" cy="79" r="6" fill="#16302a"/>
+    <rect x="720" y="68" width="280" height="22" rx="11" fill="#0a0d0c" stroke="#16302a"/>
+    <text x="732" y="84" font-size="12" fill="#6f8f84">jamie.ai (mock) - drawn on live</text>
+
+    <rect x="650" y="128" width="320" height="20" rx="4" fill="#1c2b25"/>
+    <path d="M645 136 C680 118, 710 152, 745 132 S810 118, 845 140 S910 152, 950 130" stroke="#00e05a" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <text x="650" y="174" font-size="13" fill="#37ff8b">mark on h1 + button</text>
+
+    <rect x="642" y="184" width="166" height="62" rx="27" stroke="#00e05a" stroke-width="2" stroke-dasharray="7 5" fill="none"/>
+    <rect x="650" y="192" width="150" height="46" rx="23" fill="#00e05a"/>
+    <text x="676" y="221" font-size="16" fill="#040505" font-weight="bold">Download</text>
+    <text x="820" y="220" font-size="12" fill="#37ff8b">element: button.btn</text>
+
+    <rect x="650" y="272" width="460" height="64" rx="10" stroke="#16302a" fill="#0d1412"/>
+    <text x="666" y="298" font-size="14" fill="#4cc9f0">agent: reason first (words + marks + elements)</text>
+    <text x="666" y="320" font-size="14" fill="#37ff8b">execute: preview updated, nothing published</text>
+  </g>
+
+  <text x="60" y="392" font-size="14" fill="#6f8f84">RESON8 turns (ears) + CLAUDE (brain) + your words + your marks = the page obeys</text>
+</svg>
