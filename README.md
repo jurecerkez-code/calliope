@@ -18,7 +18,17 @@
 
 In meetings people talk and sketch at the same time. Text alone loses the sketch. This agent takes both, your words and the marks you draw on the page, tied to the same clock, and rebuilds the website while the conversation keeps going.
 
-Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026. Team: Jure Cerkez, Simon van Laak.
+Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
+
+## Team
+
+| | |
+|---|---|
+| **Jure Cerkez** | M.Sc. Technology & Management, Fall 2025 |
+| Ahmed Sohail | M.Sc. Technology & Management (Apollo11), Fall 2025 |
+| Gonçalo de Deus | M.Sc. Technology & Management, Fall 2025 |
+| Pascal Finn Krebs | M.Sc. Technology & Management, #district13 |
+| Simon van Laak | PM Gen5, Co-Founder @ apparent |
 
 ## What it does
 
