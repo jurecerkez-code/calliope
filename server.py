@@ -11,9 +11,12 @@ import asyncio
 import json
 import os
 import re
+import stat
 import threading
+import urllib.error
 import urllib.request
 import math
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -47,10 +50,58 @@ HTTP_PORT = int(os.environ.get('HTTP_PORT', '8800'))
 AUDIO_PORT = int(os.environ.get('AUDIO_PORT', '8801'))
 # Set this to the exact HTTPS origin only when the loopback server sits behind a trusted proxy.
 STUDIO_ORIGIN = os.environ.get('STUDIO_ORIGIN', '')
+TRACE_DIR = Path(os.environ.get('CALLIOPE_TRACE_DIR', str(HERE / 'traces')))
+TRACE_LOCK = threading.Lock()
+TRACE_ID = re.compile(r'[a-f0-9]{32}\Z')
+TRACE_FILE_LIMIT = 8_000_000
+TRACE_SESSION_LIMIT = 64
+TRACE_FIELDS = {
+    'turn_start': {'elapsedMs'}, 'turn_candidate': {'text', 'start_ms', 'duration_ms', 'words'},
+    'turn_final': {'mode', 'operation', 'turn'}, 'turn_empty': {'elapsedMs'},
+    'mic_error': {'error'}, 'mark_failed': {'mark', 'error'},
+    'mark_captured': {'mode', 'mark'}, 'canvas_stroke': {'stroke'},
+    'apply_blocked': {'reason', 'turn', 'mark_ids'},
+    'preview_updated': {'source', 'url', 'request_id', 'elapsedMs'},
+    'session_started': {'startedAt'},
+}
 STROKES = {}
 STROKES_LOCK = threading.Lock()
 IMPORT_SLOTS = threading.BoundedSemaphore(4)
 MARKS = {}
+
+def trace_event(session_id, event, data):
+    """Append one private, durable JSON line; never write credentials or audio."""
+    if session_id is None:
+        return  # Legacy clients have no session identity.
+    if not isinstance(session_id, str) or not TRACE_ID.fullmatch(session_id):
+        raise ValueError('invalid trace session id')
+    record = (json.dumps({'at': datetime.now(timezone.utc).isoformat(),
+                          'event': event, 'data': data}, ensure_ascii=False) + '\n').encode()
+    if len(record) > 470_000:
+        raise OSError('trace record too large')
+    with TRACE_LOCK:
+        TRACE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not stat.S_ISDIR(TRACE_DIR.lstat().st_mode) or TRACE_DIR.is_symlink():
+            raise OSError('trace directory is not a regular directory')
+        TRACE_DIR.chmod(0o700)
+        path = TRACE_DIR / (session_id + '.jsonl')
+        if not os.path.lexists(path) and sum(1 for item in TRACE_DIR.iterdir()
+                                            if item.name.endswith('.jsonl')) >= TRACE_SESSION_LIMIT:
+            raise OSError('trace session limit reached')
+        fd = os.open(path,
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+                raise OSError('unsafe trace file')
+            if info.st_size + len(record) > TRACE_FILE_LIMIT:
+                raise OSError('trace file limit reached')
+            os.fchmod(fd, 0o600)
+            if os.write(fd, record) != len(record):
+                raise OSError('incomplete trace write')
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 def valid_stroke(s):
     if not isinstance(s, dict) or not isinstance(s.get('id'), str) or not re.fullmatch(r'[\w-]{1,80}', s['id']):
@@ -345,7 +396,8 @@ class ProviderAnswerError(ValueError):
     """The provider replied, but not with an executable complete document."""
 
 
-def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None) -> dict:
+def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None,
+                 on_response=None) -> dict:
     """Send the exact built message; return reasoning and updated HTML."""
     if prompt is None:
         prompt = build_agent_prompt(bundles, current_html)
@@ -363,11 +415,26 @@ def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None) ->
             "content-type": "application/json",
         },
     )
-    with urllib.request.build_opener(NoRedirect).open(req, timeout=120) as response:
-        try:
-            resp = json.load(response)
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed provider response') from e
+    try:
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=120) as response:
+            raw = response.read(1_000_001)
+    except urllib.error.HTTPError as error:
+        if on_response:
+            on_response({'http_status': error.code, 'raw_text': error.read(100_000).decode('utf-8', 'replace')})
+        raise
+    if len(raw) > 1_000_000:
+        if on_response:
+            on_response({'raw_text': raw[:100_000].decode('utf-8', 'replace'), 'truncated': True})
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: response too large')
+    try:
+        resp = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        if on_response:
+            on_response({'raw_text': raw[:100_000].decode('utf-8', 'replace'),
+                         'truncated': len(raw) > 100_000})
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed provider response') from e
+    if on_response:
+        on_response(resp)
     choices = resp.get('choices') if isinstance(resp, dict) else None
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid response')
@@ -494,15 +561,36 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send(400, {"error": f"bad json: {e}"})
             return
-        if self.path == '/api/import':
+        if self.path == '/api/trace':
+            if (not isinstance(payload, dict) or payload.get('event') not in TRACE_FIELDS or
+                    not isinstance(payload.get('data'), dict) or
+                    not payload['data'].keys() <= TRACE_FIELDS[payload['event']] or
+                    not isinstance(payload.get('session_id'), str) or
+                    not TRACE_ID.fullmatch(payload['session_id'])):
+                return self._send(400, {'error': 'invalid trace event'})
+            if len(json.dumps(payload['data'])) > 470_000:
+                return self._send(413, {'error': 'trace event too large'})
+            try:
+                trace_event(payload['session_id'], payload['event'], payload['data'])
+            except OSError:
+                return self._send(507, {'error': 'trace write failed'})
+            self._send(202, {'status': 'recorded'})
+        elif self.path == '/api/import':
             if not IMPORT_SLOTS.acquire(blocking=False):
                 return self._send(429, {'error': 'too many imports in progress'})
             try:
                 if not isinstance(payload, dict):
                     raise ValueError('invalid import request')
-                self._send(200, import_page(payload.get('url')))
+                session_id = payload.get('session_id')
+                if session_id is not None and (not isinstance(session_id, str) or not TRACE_ID.fullmatch(session_id)):
+                    raise ValueError('invalid trace session id')
+                out = import_page(payload.get('url'))
+                trace_event(session_id, 'page_imported', {'url': out.get('url'), 'html': out.get('html')})
+                self._send(200, out)
             except ValueError as e:
                 self._send(400, {'error': str(e)})
+            except OSError:
+                self._send(507, {'error': 'trace write failed; import not shown'})
             except Exception:
                 self._send(502, {'error': 'could not fetch website'})
             finally:
@@ -524,11 +612,20 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/api/marks':
             if not valid_mark(payload):
                 return self._send(400, {'error': 'invalid mark'})
+            session_id = payload.get('session_id')
+            if session_id is not None and (not isinstance(session_id, str) or not TRACE_ID.fullmatch(session_id)):
+                return self._send(400, {'error': 'invalid trace session id'})
+            payload = {key: value for key, value in payload.items() if key != 'session_id'}
             with STROKES_LOCK:
                 if len(MARKS) >= 500 and payload['id'] not in MARKS:
                     return self._send(507, {'error': 'mark store full'})
                 if payload['id'] in MARKS and MARKS[payload['id']] != payload:
                     return self._send(409, {'error': 'id conflict'})
+                try:
+                    trace_event(session_id, 'mark_accepted', {'mark': payload,
+                        'receipt': agent_sketch_message(payload)})
+                except OSError:
+                    return self._send(507, {'error': 'trace write failed; mark not accepted'})
                 MARKS[payload['id']] = payload
             self._send(201, {'id': payload['id'], 'status': 'accepted',
                              'agent_message': agent_sketch_message(payload)})
@@ -538,6 +635,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {'mark': mark}) if mark else self._send(404, {'error': 'not found'})
         elif self.path == "/api/apply":
             prompt = None
+            agent_attempted = False
+            session_id = payload.get('session_id') if isinstance(payload, dict) else None
+            request_id = payload.get('request_id') if isinstance(payload, dict) else None
+            if session_id is not None and (not isinstance(session_id, str) or not TRACE_ID.fullmatch(session_id) or
+                not isinstance(request_id, str) or not TRACE_ID.fullmatch(request_id)):
+                return self._send(400, {'error': 'invalid trace request id'})
             try:
                 strokes = [s for b in payload.get('bundles', []) for s in b.get('strokes', [])]
                 with STROKES_LOCK:
@@ -547,15 +650,37 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {'error': 'invalid arrow relation for accepted marks'})
                 bundles, html = payload.get('bundles', []), payload.get('current_html', '')
                 prompt = build_agent_prompt(bundles, html, payload.get('relations', []))
+                trace_event(session_id, 'apply_requested', {'request_id': request_id,
+                    'bundles': bundles, 'relations': payload.get('relations', []),
+                    'current_html': html, 'prompt': prompt})
                 if not LYCEUM_KEY:
+                    trace_event(session_id, 'apply_result', {'request_id': request_id,
+                        'status': 'not_sent', 'error': 'agent key unavailable'})
                     return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured',
                                             'agent_message': prompt})
-                out = lyceum_apply(bundles, html, prompt=prompt)
+                agent_attempted = True
+                out = lyceum_apply(bundles, html, prompt=prompt,
+                    on_response=lambda response: trace_event(session_id, 'provider_response',
+                        {'request_id': request_id, 'response': response}))
+                trace_event(session_id, 'apply_result', {'request_id': request_id,
+                    'status': 'succeeded', 'response': out})
                 out['agent_message'] = prompt
                 self._send(200, out)
             except ProviderAnswerError as e:
+                try:
+                    trace_event(session_id, 'apply_result', {'request_id': request_id,
+                        'status': 'failed_after_attempt' if agent_attempted else 'not_sent',
+                        'error': str(e)[:1000]})
+                except (OSError, ValueError):
+                    pass
                 self._send(502, {'error': str(e), 'agent_message': prompt})
             except Exception as e:  # surface the error to the UI, never crash the demo
+                try:
+                    trace_event(session_id, 'apply_result', {'request_id': request_id,
+                        'status': 'failed_after_attempt' if agent_attempted else 'not_sent',
+                        'error': str(e)[:1000]})
+                except (OSError, ValueError):
+                    pass
                 self._send(500, {"error": str(e), 'agent_message': prompt})
         elif self.path == "/api/publish":
             if os.environ.get('CALLIOPE_REVIEW_MODE') == '1':

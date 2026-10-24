@@ -1,12 +1,15 @@
 """Regression checks for Calliope's drawing handoff and built studio."""
 import json
 import http.client
+import os
 import re
 import socket
+import tempfile
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -59,6 +62,111 @@ class StudioTest(unittest.TestCase):
             'path': 'M 20 30 L 30 20 L 40 30 L 30 40 L 20 30',
             'shape': 'circle', 'enclosed_element': 'h1 "Draw together"',
         }
+
+    def test_private_session_trace_links_transcript_marks_prompt_and_result(self):
+        session = 'a' * 32
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'):
+            code, _ = self.post('/api/trace', {'session_id': session, 'event': 'turn_final',
+                'data': {'mode': 'website', 'operation': 'live',
+                         'turn': {'text': 'make this green', 'startMs': 10,
+                                  'endMs': 40, 'words': [{'text': 'green', 'startMs': 30}]}}})
+            self.assertEqual(code, 202)
+            stroke = self.stroke()
+            mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': 10, 't_end': 20,
+                    'enclosed_element': stroke['enclosed_element'], 'strokes': [stroke],
+                    'session_id': session}
+            self.assertEqual(self.post('/api/marks', mark)[0], 201)
+            request = {'session_id': session, 'request_id': 'b' * 32,
+                'bundles': [{'transcript': 'make this green', 'strokes': [
+                    {k: v for k, v in mark.items() if k != 'session_id'}]}],
+                'relations': [], 'current_html': '<html>before</html>'}
+            with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply',
+                 return_value={'html': '<html>after</html>', 'reasoning': 'Changed the heading'}):
+                self.assertEqual(self.post('/api/apply', request)[0], 200)
+            trace = Path(root) / 'traces' / (session + '.jsonl')
+            events = [json.loads(line) for line in trace.read_text().splitlines()]
+            self.assertEqual([event['event'] for event in events],
+                             ['turn_final', 'mark_accepted', 'apply_requested', 'apply_result'])
+            self.assertEqual(events[1]['data']['mark']['strokes'][0]['pts'], stroke['pts'])
+            self.assertEqual(events[2]['data']['request_id'], request['request_id'])
+            self.assertIn('make this green', events[2]['data']['prompt'])
+            self.assertEqual(events[3]['data']['response']['html'], '<html>after</html>')
+            self.assertEqual(os.stat(trace).st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat(trace.parent).st_mode & 0o777, 0o700)
+            self.assertEqual(self.post('/api/trace', {'session_id': '../outside',
+                'event': 'turn_final', 'data': {'text': 'private'}})[0], 400)
+            self.assertEqual(self.post('/api/marks', {**mark, 'session_id': '../outside'})[0], 400)
+            self.assertEqual(self.post('/api/trace', {'event': 'turn_final', 'data': {'text': 'private'}})[0], 400)
+            self.assertEqual(self.post('/api/trace', {'session_id': session,
+                'event': 'session_started', 'data': {'audio': 'not an event field'}})[0], 400)
+            with self.assertRaises(HTTPError) as denied:
+                urlopen(self.url + '/traces/' + session + '.jsonl')
+            self.assertEqual(denied.exception.code, 404)
+
+    def test_trace_rejects_symlink_file_without_overwriting_target(self):
+        session = 'e' * 32
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'):
+            trace_dir = Path(root) / 'traces'
+            trace_dir.mkdir()
+            target = Path(root) / 'target'
+            target.write_text('keep me')
+            (trace_dir / (session + '.jsonl')).symlink_to(target)
+            self.assertEqual(self.post('/api/trace', {'session_id': session,
+                'event': 'session_started', 'data': {'startedAt': 'now'}})[0], 507)
+            self.assertEqual(target.read_text(), 'keep me')
+
+    def test_trace_limits_session_count_and_file_growth(self):
+        session = '2' * 32
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'TRACE_SESSION_LIMIT', 1), patch.object(server, 'TRACE_FILE_LIMIT', 250):
+            body = {'session_id': session, 'event': 'session_started', 'data': {'startedAt': 'now'}}
+            self.assertEqual(self.post('/api/trace', body)[0], 202)
+            self.assertEqual(self.post('/api/trace', {**body, 'session_id': '3' * 32})[0], 507)
+            self.assertEqual(self.post('/api/trace', body)[0], 202)
+            self.assertEqual(self.post('/api/trace', body)[0], 507)
+            self.assertEqual(len(list((Path(root) / 'traces').glob('*.jsonl'))), 1)
+
+    def test_malformed_provider_reply_is_traced_before_parse_error(self):
+        session = '4' * 32
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'not json'
+            code, _ = self.post('/api/apply', {'session_id': session, 'request_id': '5' * 32,
+                'bundles': [{'transcript': 'change', 'strokes': []}], 'current_html': '<html>old</html>'})
+            self.assertEqual(code, 502)
+            events = [json.loads(line) for line in (Path(root) / 'traces' / (session + '.jsonl')).read_text().splitlines()]
+            self.assertEqual(events[1]['event'], 'provider_response')
+            self.assertEqual(events[1]['data']['response']['raw_text'], 'not json')
+
+    def test_unavailable_agent_is_traced_as_prepared_not_sent(self):
+        session = 'c' * 32
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'LYCEUM_KEY', ''):
+            code, _ = self.post('/api/apply', {'session_id': session, 'request_id': 'd' * 32,
+                'bundles': [{'transcript': 'hello', 'strokes': []}], 'current_html': '<html>old</html>'})
+            self.assertEqual(code, 503)
+            events = [json.loads(line) for line in (Path(root) / 'traces' / (session + '.jsonl')).read_text().splitlines()]
+            self.assertEqual([event['event'] for event in events], ['apply_requested', 'apply_result'])
+            self.assertEqual(events[-1]['data']['status'], 'not_sent')
+
+    def test_incomplete_agent_answer_retains_raw_response_for_diagnosis(self):
+        session = 'f' * 32
+        reply = {'choices': [{'finish_reason': 'length', 'message': {'content': '<html>cut off'}}]}
+        def incomplete(bundles, html, prompt, on_response):
+            on_response(reply)
+            raise server.ProviderAnswerError('Lyceum returned no complete HTML answer')
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'lyceum_apply', side_effect=incomplete):
+            code, _ = self.post('/api/apply', {'session_id': session, 'request_id': '1' * 32,
+                'bundles': [{'transcript': 'change the page', 'strokes': []}],
+                'current_html': '<html>before</html>'})
+            self.assertEqual(code, 502)
+            events = [json.loads(line) for line in (Path(root) / 'traces' / (session + '.jsonl')).read_text().splitlines()]
+            self.assertEqual(events[1]['event'], 'provider_response')
+            self.assertEqual(events[1]['data']['response'], reply)
+            self.assertEqual(events[2]['data']['status'], 'failed_after_attempt')
 
     def test_stroke_receipt_readback_and_apply_gate(self):
         stroke = self.stroke()
@@ -303,10 +411,11 @@ class StudioTest(unittest.TestCase):
         self.assertNotIn('SKETCH on:', prompt)
 
     def test_lyceum_apply_uses_chat_completions_and_returns_html(self):
+        raw = []
         with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
              patch.object(server.urllib.request, 'build_opener') as opener:
             opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply('Follow the sketch', '<!DOCTYPE html><html><h1>Updated</h1></html>')
-            result = server.lyceum_apply([], '<html>old</html>', prompt='change it')
+            result = server.lyceum_apply([], '<html>old</html>', prompt='change it', on_response=raw.append)
         opener.assert_called_once_with(server.NoRedirect)
         sent = opener.return_value.open.call_args.args[0]
         body = json.loads(sent.data)
@@ -316,6 +425,8 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(body['reasoning_effort'], 'none')
         self.assertEqual(body['messages'], [{'role': 'user', 'content': 'change it'}])
         self.assertEqual(result, {'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'})
+        self.assertEqual(raw[0]['choices'][0]['message']['content'], json.dumps({
+            'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'}))
 
     def test_agent_can_return_updated_html_without_reasoning(self):
         prompt = server.build_agent_prompt(
