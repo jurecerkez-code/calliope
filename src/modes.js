@@ -9,9 +9,18 @@ export const eventsForMode = (timeline, mode) => timeline.filter(event => event.
 // destination. Otherwise live speech APPLY consumes the circle before the
 // following arrow can refer to it.
 export function awaitingMoveArrow(events, relations) {
-  return events.some(e => e.kind === 'transcript' && classifyIntent(e.text) === 'move') &&
-    events.some(e => e.kind === 'stroke' && isWebsiteMark(e.payload)) &&
-    !relations.some(r => r.kind === 'move' || r.kind === 'link');
+  const sources = events.filter(e => e.kind === 'stroke' && isWebsiteMark(e.payload));
+  const strokes = new Map(events.filter(e => e.kind === 'stroke').map(e => [e.payload.id, e]));
+  return events.some(turn => {
+    if (turn.kind !== 'transcript' || classifyIntent(turn.text) !== 'move') return false;
+    // A source drawn during recognition can settle after the spoken turn.
+    if (!sources.length) return true;
+    const source = sources.reduce((best, e) =>
+      Math.abs(e.t - turn.t) < Math.abs(best.t - turn.t) ? e : best);
+    return !relations.some(r => (r.kind === 'move' || r.kind === 'link') &&
+      r.from?.stroke === source.payload.strokes[0].id &&
+      Math.abs((strokes.get(r.arrow)?.t ?? Infinity) - turn.t) <= 5000);
+  });
 }
 
 const clock = ms => {

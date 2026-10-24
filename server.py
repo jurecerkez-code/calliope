@@ -204,7 +204,8 @@ def valid_relations(relations, marks) -> bool:
             return False
         arrow = item['strokes'][0]
         box = arrow['bbox']
-        if arrow['tool'] != 'pen' or arrow['shape'] in ('circle', 'square', 'triangle') or math.hypot(box['width'], box['height']) <= 40:
+        if (arrow['tool'] != 'pen' or arrow['shape'] in ('circle', 'square', 'triangle') or
+                is_website_loop(arrow) or math.hypot(box['width'], box['height']) <= 40):
             return False
         start = arrow['pts'][0]
         tip = max(arrow['pts'], key=lambda p: (p['x'] - start['x']) ** 2 + (p['y'] - start['y']) ** 2)

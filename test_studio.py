@@ -158,6 +158,31 @@ class StudioTest(unittest.TestCase):
             self.assertEqual(code, 200, response)
             agent.assert_called_once()
 
+    def test_loop_cannot_pose_as_move_arrow(self):
+        circle = self.stroke()
+        points = [{**circle['pts'][0], 'x': x, 'y': y,
+                   'selector': 'section#destination' if x == 200 else 'h1',
+                   'text': 'Destination' if x == 200 else ''}
+                  for x, y in [(20, 20), (200, 20), (200, 80), (20, 80), (20, 60)]]
+        loop = {**circle, 'id': 'forged-loop-arrow', 'shape': 'freehand', 't': 30, 't_end': 40,
+                'enclosed_element': '', 'pts': points,
+                'bbox': {'x': 20, 'y': 20, 'width': 180, 'height': 60},
+                'path': 'M 20 20 L 200 20 L 200 80 L 20 80 L 20 60'}
+        wrap = lambda s: {'id': s['id'], 'shape': s['shape'], 't': s['t'],
+                          't_end': s['t_end'], 'enclosed_element': s['enclosed_element'], 'strokes': [s]}
+        items = [wrap(circle), wrap(loop)]
+        relation = {'kind': 'move', 'arrow': loop['id'],
+                    'from': {'stroke': circle['id'], 'target': circle['enclosed_element']},
+                    'to': {'stroke': None, 'target': 'section#destination', 'text': 'Destination',
+                           'x': 200, 'y': 80}}
+        self.assertTrue(server.is_website_loop(loop))
+        for item in items:
+            self.assertEqual(self.post('/api/marks', item)[0], 201)
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply') as agent:
+            code, _ = self.post('/api/apply', {'bundles': [{'strokes': items}], 'relations': [relation]})
+            self.assertEqual(code, 400)
+            agent.assert_not_called()
+
     def test_only_pen_strokes_are_accepted(self):
         stroke = self.stroke()
         stroke['tool'] = 'highlighter'

@@ -124,7 +124,7 @@
     if(micOn){audio?.stop();micOn=false;return;}
     try{await audio.start();micOn=true;}catch(err){addLine('err','MIC FAILED: '+err.message);}
   }
-  async function apply(){
+  async function apply(force=false){
     if(mode!=='website'||operation!=='live'||busy)return;
     if(activeStroke){addLine('err','FINISH DRAWING BEFORE APPLY');return;}
     const runModeVersion=modeVersion;
@@ -136,7 +136,7 @@
       const bundles=buildBundles(sent), marks=sent.filter(e=>e.kind==='stroke').map(e=>e.payload);
       if(!bundles.length){status='NOTHING NEW FOR THE AGENT.';return;}
       const relations=websiteRelations(marks).slice(0,50);
-      if(awaitingMoveArrow(sent,relations)){status='DRAW AN ARROW TO COMPLETE THE MOVE.';return;}
+      if(!force&&awaitingMoveArrow(sent,relations)){status='DRAW AN ARROW TO COMPLETE THE MOVE, OR PRESS APPLY TO SEND SPEECH ONLY.';return;}
       await Promise.all(marks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
@@ -317,7 +317,7 @@
         <div class="session-tools"><Button id="btnCopyAgent" variant="amber" onclick={copyForAgent}>COPY FOR AGENT</Button><Button id="btnCopyPng" onclick={copyPng}>COPY PNG</Button><Button id="btnDownloadPng" onclick={downloadPng}>DOWNLOAD PNG</Button></div>
         <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
       {:else if operation==='live'}
-        <Button id="btnApply" variant="amber" disabled={busy} onclick={requestApply}>APPLY ▸</Button>
+        <Button id="btnApply" variant="amber" disabled={busy} onclick={() => apply(true)}>APPLY ▸</Button>
         {#if publishEnabled}<Button id="btnPublish" disabled={busy} onclick={publish}>PUBLISH</Button>{/if}
         <div class="notice">LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW WITH ITS MARKS. APPLY SENDS MARKS WITHOUT SPEECH. {publishEnabled?'PUBLISH STAGES LOCALLY; DEPLOY IS SEPARATE.':'REVIEW ONLY — APPLY SHOWS THE PREPARED MESSAGE, NOT A LIVE AGENT EDIT.'}</div>
       {:else}

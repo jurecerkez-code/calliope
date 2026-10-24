@@ -386,19 +386,27 @@ test('a live move waits for its arrow without consuming a circled source at the 
     pts:[point(20,20),point(100,20),point(100,80),point(20,80),point(20,20)]}]};
   const arrow={id:'arrow',shape:'freehand',t:30,strokes:[{id:'arrow',shape:'freehand',tool:'pen',
     bbox:{x:25,y:60,width:195,height:0},pts:[point(25,60),point(220,60,'section#destination')]}]};
-  const events=[{kind:'stroke',mode:'live',payload:source},
+  const events=[{kind:'stroke',mode:'live',t:10,payload:source},
     {kind:'transcript',mode:'live',text:'move this',t:20},
-    {kind:'stroke',mode:'recording',payload:arrow}];
+    {kind:'stroke',mode:'recording',t:30,payload:arrow}];
   const live=eventsForMode(events,'live');
   const before=websiteRelations(live.filter(e=>e.kind==='stroke').map(e=>e.payload));
   assert.equal(awaitingMoveArrow(live,before),true);
-  const completed=[...live,{kind:'stroke',mode:'live',payload:arrow}];
+  assert.equal(awaitingMoveArrow([live[1]],[]),true);
+  const completed=[...live,{kind:'stroke',mode:'live',t:30,payload:arrow}];
   const relations=websiteRelations(completed.filter(e=>e.kind==='stroke').map(e=>e.payload));
   assert.equal(relations[0].kind,'move');
   assert.equal(relations[0].from.stroke,'source');
   assert.equal(awaitingMoveArrow(completed,relations),false);
+  const oldSource={...source,id:'old',strokes:[{...source.strokes[0],id:'old'}]};
+  const older=[{kind:'stroke',mode:'live',t:1,payload:oldSource},
+    {kind:'stroke',mode:'live',t:2,payload:arrow},
+    {kind:'stroke',mode:'live',t:19,payload:source},live[1]];
+  const priorRelation={kind:'move',from:{stroke:'old'},arrow:'arrow'};
+  assert.equal(awaitingMoveArrow(older,[priorRelation]),true);
   const app=readFileSync(new URL('./src/App.svelte',import.meta.url),'utf8');
-  assert.match(app,/if\(awaitingMoveArrow\(sent,relations\)\)/);
+  assert.match(app,/if\(!force&&awaitingMoveArrow\(sent,relations\)\)/);
   assert.match(app,/deliver\(mark\)\.then\(requestApply\)/);
+  assert.match(app,/onclick=\{\(\) => apply\(true\)\}/);
   assert.match(app,/JSON\.stringify\(\{bundles,relations,current_html:currentHtml\}\)/);
 });
