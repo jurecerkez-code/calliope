@@ -77,6 +77,12 @@ class StudioTest(unittest.TestCase):
             'shape': 'circle', 'enclosed_element': 'h1 "Draw together"',
         }
 
+    def test_retired_jamie_mock_route_is_not_served(self):
+        with self.assertRaises(HTTPError) as denied:
+            urlopen(self.url + '/jamie-mock.html')
+        self.assertEqual(denied.exception.code, 404)
+        denied.exception.close()
+
     def test_private_session_trace_links_transcript_marks_prompt_and_result(self):
         session = 'a' * 32
         with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'):

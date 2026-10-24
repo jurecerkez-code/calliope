@@ -667,14 +667,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('content-length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        elif self.path == "/jamie-mock.html":
-            data = (HERE / "jamie-mock.html").read_bytes()
-            self.send_response(200)
-            self.send_header("content-type", "text/html")
-            self.send_header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'none'; form-action 'none'")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
         elif self.path in ("/", "/index.html"):
             data = (DIST / "index.html").read_bytes()
             self.send_response(200)
