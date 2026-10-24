@@ -40,6 +40,10 @@ test('Calliope retains its brand and staged publish control in the migrated stud
   assert.match(app, /PUBLISH/);
   assert.match(app, /disabled=\{busy\|\|!publishEnabled\}/);
   assert.match(app, /REVIEW ONLY/);
+  assert.match(app, /ack\.agent_message/);
+  assert.match(app, /AGENT SKETCH CONTEXT/);
+  assert.match(app, /out\.agent_message/);
+  assert.match(app, /FULL AGENT MESSAGE/);
 });
 
 const slash = (id, a, b, t) => makePayload({id,tool:'pen',t,

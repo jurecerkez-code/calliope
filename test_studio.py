@@ -63,12 +63,24 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(readback['stroke'], stroke)
 
     def test_shape_time_and_target_lead_agent_prompt(self):
+        stroke = self.stroke()
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
+                'strokes': [stroke]}
+        code, receipt = self.post('/api/marks', mark)
+        self.assertEqual(code, 201)
+        message = receipt['agent_message']
+        self.assertIn('Circle drawn at 2026-10-24T12:00:00Z', message)
+        self.assertIn('coordinates x 20–40, y 20–40', message)
+        self.assertIn('around h1 "Draw together"', message)
+        self.assertIn('touched h1', message)
+        self.assertIn('preview-document-css-pixels', message)
+        self.assertIn('949×2862', message)
         with patch.object(server.urllib.request, 'urlopen') as request:
             request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
-            server.claude_apply([{'transcript': 'change this', 'strokes': [self.stroke()]}], '<html></html>')
+            server.claude_apply([{'transcript': 'change this', 'strokes': [mark]}], '<html></html>')
             prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
-        self.assertIn('Circle drawn at 2026-10-24T12:00:00Z', prompt)
-        self.assertIn('around h1 "Draw together"', prompt)
+        self.assertIn(message, prompt)
         self.assertNotIn('SKETCH on:', prompt)
 
     def test_grouped_x_receipt_and_agent_gate(self):
@@ -89,6 +101,9 @@ class StudioTest(unittest.TestCase):
             code, receipt = self.post('/api/marks', mark)
             self.assertEqual(code, 201)
             self.assertEqual(receipt['id'], mark['id'])
+            message = receipt['agent_message']
+            self.assertIn('touched h1', message)
+            self.assertIn('coordinates x 20–40, y 20–40', message)
             code, readback = self.post('/api/marks/readback', {'id': mark['id']})
             self.assertEqual(code, 200)
             self.assertEqual(readback['mark'], mark)
@@ -101,6 +116,7 @@ class StudioTest(unittest.TestCase):
             server.claude_apply([bundle], '<html></html>')
             prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
         self.assertIn('X', prompt)
+        self.assertIn(message, prompt)
         self.assertIn(first['path'], prompt)
         self.assertIn(second['path'], prompt)
 
@@ -115,6 +131,38 @@ class StudioTest(unittest.TestCase):
             code, _ = self.post('/api/apply', {'bundles': [{'strokes': [mark]}], 'current_html': '<html></html>'})
             self.assertEqual(code, 409)
             agent.assert_not_called()
+
+    def test_invalid_dom_elements_leave_no_stored_mark(self):
+        stroke = self.stroke()
+        stroke['elements'] = [{'selector': 'h1'}]
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
+                'strokes': [stroke]}
+        code, _ = self.post('/api/marks', mark)
+        self.assertEqual(code, 400)
+        code, _ = self.post('/api/marks/readback', {'id': mark['id']})
+        self.assertEqual(code, 404)
+
+    def test_apply_returns_the_exact_full_agent_message(self):
+        stroke = self.stroke()
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
+                't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
+                'strokes': [stroke]}
+        _, receipt = self.post('/api/marks', mark)
+        payload = {'bundles': [{'transcript': 'change this', 'strokes': [mark]}],
+                   'current_html': '<html><body><h1>Draw together</h1></body></html>'}
+        with patch.object(server, 'ANTHROPIC_KEY', ''):
+            code, unavailable = self.post('/api/apply', payload)
+        self.assertEqual(code, 503)
+        self.assertIn(receipt['agent_message'], unavailable['agent_message'])
+        self.assertIn(payload['current_html'], unavailable['agent_message'])
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server.urllib.request, 'urlopen') as request:
+            request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
+            code, result = self.post('/api/apply', payload)
+            sent = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
+        self.assertEqual(code, 200)
+        self.assertEqual(result['agent_message'], sent)
+        self.assertIn(receipt['agent_message'], sent)
 
     def test_built_studio_and_original_loader_available(self):
         with patch.dict(server.os.environ, {'CALLIOPE_REVIEW_MODE': '1'}):

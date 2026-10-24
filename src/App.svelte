@@ -20,15 +20,21 @@
   function cryptoId(){const bytes=new Uint8Array(8);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
   function scroll(){requestAnimationFrame(()=>{if(feed)feed.scrollTop=feed.scrollHeight;});}
   function rowText(stroke,state){const p=stroke.pts.at(-1);return `${stroke.summary?.text || stroke.tool.toUpperCase()+' '+p.x+', '+p.y+' · '+p.utc} · ${state}`;}
-  function updateRow(mark,state){rows=rows.map(row=>row.key===mark.id?{...row,text:`${mark.shape.toUpperCase()} · ${mark.strokes.length} PATH${mark.strokes.length===1?'':'S'} · ${state}`} :row);scroll();}
+  function updateRow(mark,state,message){rows=rows.map(row=>{
+    if(row.key!==mark.id)return row;
+    const agentMessage=message ?? row.agentMessage;
+    return {...row,agentMessage,text:agentMessage
+      ? `${state} · AGENT SKETCH CONTEXT (FOR APPLY):\n${agentMessage}`
+      : `${mark.shape.toUpperCase()} · ${mark.strokes.length} PATH${mark.strokes.length===1?'':'S'} · ${state}`};
+  });scroll();}
   async function deliver(mark){
     if(deliveries[mark.id]==='sending'||deliveries[mark.id]==='accepted')return;
     deliveries[mark.id]='sending';updateRow(mark,'SENDING');
     try {
       const response=await fetch('/api/marks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(mark)});
       const ack=await response.json();
-      if(!response.ok||ack.status!=='accepted'||ack.id!==mark.id)throw new Error(ack.error||'invalid receipt');
-      deliveries[mark.id]='accepted';updateRow(mark,'ACCEPTED');
+      if(!response.ok||ack.status!=='accepted'||ack.id!==mark.id||typeof ack.agent_message!=='string')throw new Error(ack.error||'invalid receipt');
+      deliveries[mark.id]='accepted';updateRow(mark,'ACCEPTED',ack.agent_message);
     }catch(err){deliveries[mark.id]='failed';updateRow(mark,'FAILED — CLICK TO RETRY');addLine('err','MARK NOT DELIVERED: '+err.message);}
   }
   function retry(row){if(row.mark && deliveries[row.mark.id]==='failed')deliver(row.mark);}
@@ -72,6 +78,7 @@
       status='ANTHROPIC IS REASONING...';
       const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles:typed?[{t_start:0,t_end:0,transcript:typed,strokes:marks}]:bundles,current_html:currentHtml})});
       const out=await response.json();
+      if(typeof out.agent_message==='string')addLine('coord',`${response.ok?'SENT':'PREPARED / NOT CONFIRMED SENT'} · FULL AGENT MESSAGE:\n${out.agent_message}`);
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       if(out.reasoning)addLine('why','AGENT: '+out.reasoning);
       previewHtml(out.html);timeline=[];typed='';addLine('fin','EXECUTED ON PREVIEW. NOTHING PUBLISHED.');status='PREVIEW UPDATED. KEEP TALKING.';
