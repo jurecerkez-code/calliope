@@ -110,20 +110,20 @@ The story of the build, in order, because the path is part of the answer.
 | Part | Technology | Why |
 |---|---|---|
 | Ears | **Reson8** speech to text, turns endpoint (API client: `calliope`) | Server side turn detection with timestamps, fast enough to react mid-meeting. Audio goes 16 kHz mono PCM through a small local relay so the API key never reaches the browser. |
-| Brain | **DeepSeek V4 Flash via Lyceum** | One call uses spoken intent, drawing geometry, and target elements to write the new HTML. |
+| Brain | **Claude Haiku via Anthropic** or **DeepSeek V4 Flash via Lyceum** | One call uses spoken intent, drawing geometry, and target elements to write the new HTML. |
 
 ## Run it
 
 Requirements: Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), Node.js with npm, and Chrome. The microphone needs a secure browser origin (localhost counts) and a reachable WebSocket audio relay.
 
 ```bash
-cp .env.example .env   # fill in RESON8_API_KEY and LYCEUM_API_KEY
+cp .env.example .env   # fill in RESON8_API_KEY and either ANTHROPIC_API_KEY or LYCEUM_API_KEY
 npm ci
 npm run build
 uv run server.py
 ```
 
-Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL (or leave it empty to import **https://www.meetjamie.ai/**) or **START BLANK CANVAS**; no page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live applies completed speech turns automatically; contextual actions send sketches or speech alone and retry agent calls. Without a Lyceum key, drawing works but agent calls report unavailable. Live marks are sent to the backend; failed deliveries can be retried, and an apply refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test/test_studio.py` run the local checks.
+Set one agent key in `.env`. If both are set, Calliope selects Anthropic's fastest Claude Haiku model; otherwise it uses Lyceum with the configured `MODEL`. It does not retry a failed provider request against the other key. Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL (or leave it empty to import **https://www.meetjamie.ai/**) or **START BLANK CANVAS**; no page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live applies completed speech turns automatically; contextual actions send sketches or speech alone and retry agent calls. Without either agent key, drawing works but agent calls report unavailable. Live marks are sent to the backend; failed deliveries can be retried, and an apply refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test/test_studio.py` run the local checks.
 
 ### Session diagnostic trace
 
@@ -152,7 +152,7 @@ To use another website as the studio canvas, paste its public URL in **Website U
 
 ## Status
 
-**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, and a Lyceum DeepSeek APPLY endpoint. Typed instructions changed the preview in the isolated test deployment; the current Live voice-to-APPLY flow has not been verified end to end. The retired Chrome extension and classic page are no longer part of the app.
+**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, and Anthropic Claude or Lyceum DeepSeek APPLY support. Provider selection and response handling are covered by mocked HTTP tests; a live Anthropic request has not been verified. Typed instructions changed the preview in the isolated test deployment; the current Live voice-to-APPLY flow has not been verified end to end. The retired Chrome extension and classic page are no longer part of the app.
 
 **Not yet built:** identifying the individual printed word inside an element such as `h1` when circled. Current targeting reports the DOM element; word-range geometry needs its own implementation and browser checks. Shape fixtures are synthetic, so test real hand-drawn traces before treating a tentative label as reliable.
 

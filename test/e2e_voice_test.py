@@ -8,9 +8,9 @@
 2. Streams it through the Reson8 turns endpoint, the same endpoint the app uses,
    and prints every event the ears send back.
 3. Takes that real transcript together with a sketch bundle and sends it to the
-   agent loop (/api/apply), printing the reasoning and the executed HTML.
+   agent loop (/api/apply), printing any optional reasoning and the executed HTML.
 
-Run: uv run test/e2e_voice_test.py   (needs .env with RESON8_API_KEY and LYCEUM_API_KEY,
+Run: uv run test/e2e_voice_test.py   (needs .env with RESON8_API_KEY and one agent key,
                                 and `uv run server.py` running)
 """
 import asyncio
@@ -84,7 +84,7 @@ async def voice_to_text() -> list:
 
 
 def text_to_agent(transcript: str) -> dict:
-    """transcript + sketch bundle -> /api/apply -> reasoning + executed HTML"""
+    """transcript + sketch bundle -> /api/apply -> executed HTML"""
     # one real payload, built by the app's own makePayload, so the backend accepts it
     fixture = subprocess.run(
         ["node", "test/stroke_fixture.mjs"], capture_output=True, text=True, cwd=ROOT
@@ -133,7 +133,8 @@ async def main():
     if "error" in out:
         print(f"\n[4] AGENT ERROR: {out['error'][:300]}")
         return
-    print(f"\n[4] agent reasoning: {out.get('reasoning', '')[:400]}")
+    if out.get('reasoning'):
+        print(f"\n[4] agent reasoning: {out['reasoning'][:400]}")
     print(f"\n[5] executed html head: {out.get('html', '')[:220]!r}")
 
 

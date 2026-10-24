@@ -184,7 +184,7 @@
       await Promise.all(marks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(!canApply(marks,deliveries)){void trace('apply_blocked',{reason:'marks_not_accepted',mark_ids:marks.map(mark=>mark.id)});addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
-      status='LYCEUM IS REASONING...';
+      status='AGENT IS UPDATING PREVIEW...';
       manualAction='';
       await traceQueue;
       if(traceFailed)throw new Error('SESSION TRACE UNAVAILABLE — RELOAD BEFORE SENDING');

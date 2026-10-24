@@ -26,6 +26,10 @@ def lyceum_reply(reasoning='ok', html='<html></html>'):
 
 class StudioTest(unittest.TestCase):
     def setUp(self):
+        # Existing Lyceum cases must stay deterministic if the host has a Claude key.
+        anthropic_key = patch.object(server, 'ANTHROPIC_KEY', '')
+        anthropic_key.start()
+        self.addCleanup(anthropic_key.stop)
         with server.STROKES_LOCK:
             server.STROKES.clear()
             server.MARKS.clear()
@@ -427,6 +431,96 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(result, {'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'})
         self.assertEqual(raw[0]['choices'][0]['message']['content'], json.dumps({
             'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'}))
+
+    def test_apply_selects_claude_before_lyceum_and_accepts_either_key(self):
+        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
+                   'current_html': '<html><h1>Old</h1></html>'}
+        reply = json.dumps({'stop_reason': 'end_turn', 'content': [
+            {'type': 'text', 'text': json.dumps({'html': '<html><h1>New</h1></html>'})}
+        ]}).encode()
+        # Initialize urllib's process-wide opener before mocking its factory.
+        with urlopen(self.url + '/api/config') as response:
+            self.assertEqual(response.status, 200)
+        for lyceum_key in ('', 'lyceum-test'):
+            with self.subTest(lyceum_key=bool(lyceum_key)), \
+                 patch.object(server, 'ANTHROPIC_KEY', 'anthropic-test', create=True), \
+                 patch.object(server, 'LYCEUM_KEY', lyceum_key), \
+                 patch.object(server.urllib.request, 'build_opener') as opener:
+                opener.return_value.open.return_value.__enter__.return_value.read.return_value = reply
+                code, result = self.post('/api/apply', payload)
+                self.assertEqual(code, 200)
+                self.assertEqual(result['html'], '<html><h1>New</h1></html>')
+                request = opener.return_value.open.call_args.args[0]
+                body = json.loads(request.data)
+                self.assertEqual(request.full_url, 'https://api.anthropic.com/v1/messages')
+                self.assertEqual(request.get_header('X-api-key'), 'anthropic-test')
+                self.assertEqual(request.get_header('Anthropic-version'), '2023-06-01')
+                self.assertEqual(body['model'], 'claude-haiku-5-5')
+                self.assertEqual(body['thinking'], {'type': 'disabled'})
+                self.assertEqual(body['messages'][0]['content'], result['agent_message'])
+
+        with patch.object(server, 'ANTHROPIC_KEY', '', create=True), \
+             patch.object(server, 'LYCEUM_KEY', 'lyceum-test'), \
+             patch.object(server, 'lyceum_apply', return_value={'html': '<html>Lyceum</html>'}) as agent:
+            code, result = self.post('/api/apply', payload)
+            self.assertEqual(code, 200)
+            self.assertEqual(result['html'], '<html>Lyceum</html>')
+            agent.assert_called_once()
+        with patch.object(server, 'ANTHROPIC_KEY', '', create=True), \
+             patch.object(server, 'LYCEUM_KEY', ''):
+            code, result = self.post('/api/apply', payload)
+            self.assertEqual(code, 503)
+            self.assertIn('agent_message', result)
+
+    def test_claude_incomplete_answer_does_not_claim_success_or_expose_output(self):
+        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
+                   'current_html': '<html><h1>Old</h1></html>'}
+        with urlopen(self.url + '/api/config') as response:
+            self.assertEqual(response.status, 200)
+        for stop_reason, content, failure in (
+            ('max_tokens', '{"html":"PRIVATE OUTPUT', 'output limit'),
+            ('end_turn', '{"html":"PRIVATE OUTPUT', 'malformed JSON'),
+            ('end_turn', json.dumps({'html': '<html>PRIVATE OUTPUT'}), 'incomplete HTML'),
+        ):
+            with self.subTest(failure=failure), patch.object(server, 'ANTHROPIC_KEY', 'anthropic-test', create=True), \
+                 patch.object(server, 'LYCEUM_KEY', 'lyceum-test'), \
+                 patch.object(server, 'lyceum_apply') as lyceum, \
+                 patch.object(server.urllib.request, 'build_opener') as opener:
+                opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps({
+                    'stop_reason': stop_reason, 'content': [{'type': 'text', 'text': content}]
+                }).encode()
+                code, result = self.post('/api/apply', payload)
+                self.assertEqual(code, 502)
+                self.assertIn(failure, result['error'])
+                self.assertNotIn('PRIVATE', result['error'])
+                self.assertNotIn('html', result)
+                lyceum.assert_not_called()
+                self.assertEqual(result['agent_message'], server.build_agent_prompt(
+                    payload['bundles'], payload['current_html'], []))
+
+    def test_claude_response_is_recorded_in_private_trace(self):
+        session = 'c' * 32
+        reply = {'stop_reason': 'end_turn', 'content': [
+            {'type': 'text', 'text': json.dumps({'html': '<html>Updated</html>'})}]}
+        with urlopen(self.url + '/api/config') as response:
+            self.assertEqual(response.status, 200)
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'ANTHROPIC_KEY', 'anthropic-test'), \
+             patch.object(server, 'LYCEUM_KEY', 'lyceum-test'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
+            code, result = self.post('/api/apply', {
+                'session_id': session, 'request_id': 'd' * 32,
+                'bundles': [{'transcript': 'Update', 'strokes': []}],
+                'current_html': '<html>Old</html>'})
+            self.assertEqual(code, 200, result)
+            trace = Path(root) / 'traces' / (session + '.jsonl')
+            events = [json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertEqual([event['event'] for event in events],
+                         ['apply_requested', 'provider_response', 'apply_result'])
+        self.assertEqual(events[1]['data']['response'], reply)
+        self.assertEqual(events[2]['data']['status'], 'succeeded')
 
     def test_agent_can_return_updated_html_without_reasoning(self):
         prompt = server.build_agent_prompt(
