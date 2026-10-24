@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { bindReferences, classifyIntent, fuse, buildPacket, packetText, simulateWords } from './src/lib/fusion.js';
-import { adaptMessage } from './src/lib/reson8.js';
+import { adaptMessage } from './src/lib/turn-timing.js';
 
 const stroke = (id, startMs, endMs, label, extra = {}) => ({
   id, startMs, endMs, shape: 'closed-loop',
@@ -67,14 +67,14 @@ test('packet is valid JSON with the brief fields', () => {
   assert.ok(json.timeline.every((t, i, a) => i === 0 || a[i - 1].startMs <= t.startMs));
 });
 
-test('reson8 adapter maps stream times onto the session clock', () => {
+test('completed turn adapter maps provider times onto the session clock', () => {
   const raw = {
-    type: 'transcript', text: 'the patient', is_final: true, start_ms: 1200, duration_ms: 700,
+    type: 'turn_end', text: 'the patient', start_ms: 1200, duration_ms: 700,
     words: [{ text: 'the', start_ms: 1200, duration_ms: 200 }, { text: 'patient', start_ms: 1410, duration_ms: 450 }],
   };
   const a = adaptMessage(raw, 5000);
-  assert.deepEqual([a.startMs, a.endMs, a.final], [6200, 6900, true]);
+  assert.deepEqual([a.startMs, a.endMs], [6200, 6900]);
   assert.deepEqual(a.words[1], { text: 'patient', startMs: 6410, endMs: 6860 });
-  assert.equal(adaptMessage({ type: 'flush_confirmation', id: null }, 0), null);
-  assert.equal(adaptMessage({ type: 'transcript', text: 'x' }, 0).final, true);
+  assert.equal(adaptMessage({ type: 'turn_start' }, 0), null);
+  assert.equal(adaptMessage({ type: 'turn_end', text: ' x ' }, 0).text, 'x');
 });
