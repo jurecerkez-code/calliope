@@ -2,7 +2,18 @@
 // real audio timing (Reson8 start_ms / words) so marks and words share one clock.
 import { adaptTurn } from './timeline.js';
 
-export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, onEvent, elapsed}) {
+export function audioWebSocketUrl(location, {audioPath, audioPort}) {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  if (audioPath !== undefined) {
+    if (location.protocol !== 'https:' || !/^\/[a-zA-Z0-9/_-]+$/.test(audioPath)) {
+      throw new Error('Invalid HTTPS audio path');
+    }
+    return `${scheme}://${location.host}${audioPath}`;
+  }
+  return `${scheme}://${location.hostname || '127.0.0.1'}:${audioPort}`;
+}
+
+export function createAudio(canvas, {port, audioPath, onLine, onTurn, onTurnStart, onEvent, elapsed}) {
   const ctx = canvas.getContext('2d');
   let ws=null, audioCtx=null, analyser=null, stream=null, frame=0;
   let audioStartMs=null, lastCandidate=null; // session time of the first sample Reson8 got
@@ -50,7 +61,7 @@ export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, onEvent,
         const src=audioCtx.createMediaStreamSource(stream);
         analyser=audioCtx.createAnalyser(); analyser.fftSize=256; src.connect(analyser);
         const proc=audioCtx.createScriptProcessor(4096,1,1);
-        ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.hostname||'127.0.0.1'}:${port}`);
+        ws=new WebSocket(audioWebSocketUrl(location, {audioPath, audioPort:port}));
         ws.binaryType='arraybuffer';
         ws.onmessage=ev=>{
           const msg=JSON.parse(ev.data);

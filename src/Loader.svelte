@@ -37,7 +37,7 @@
       </div>
       <p class="vd-line">Draw where.<br />Speak why.</p>
       <p class="vd-sub">a muse for machines.</p>
-      <p class="vd-credits">source: reson8 · reasoning: anthropic · {'{Tech: Europe}'}</p>
+      <p class="vd-credits">source: reson8 · design agent · {'{Tech: Europe}'}</p>
     </div>
     <div class="vd-bar" aria-hidden="true"><i style="width:{progress}%"></i></div>
     <p class="vd-skip">click anywhere to skip</p>

@@ -5,11 +5,14 @@ from itertools import cycle
 import os
 import re
 import socket
+import sqlite3
+from contextlib import closing
 import tempfile
 import subprocess
 import threading
 import time
 import unittest
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -1477,6 +1480,253 @@ class StudioTest(unittest.TestCase):
         finally:
             for _ in range(4):
                 server.IMPORT_SLOTS.release()
+
+
+class PublicModeTest(unittest.TestCase):
+    post = StudioTest.post
+    post_stream = StudioTest.post_stream
+    stroke = StudioTest.stroke
+    tearDown = StudioTest.tearDown
+
+    def setUp(self):
+        anthropic_key = patch.object(server, 'ANTHROPIC_KEY', '')
+        anthropic_key.start()
+        self.addCleanup(anthropic_key.stop)
+        with server.STROKES_LOCK:
+            server.STROKES.clear()
+            server.MARKS.clear()
+        self.http = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+        self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self.thread.start()
+        self.url = f'http://127.0.0.1:{self.http.server_port}'
+        mode = patch.object(server, 'PUBLIC_MODE', True, create=True)
+        mode.start()
+        self.addCleanup(mode.stop)
+        budget_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(budget_dir.cleanup)
+        budget = patch.object(server, 'PUBLIC_BUDGET_DB', Path(budget_dir.name) / 'budget.sqlite3', create=True)
+        budget.start()
+        self.addCleanup(budget.stop)
+
+    def test_public_session_boundary_and_publish_denial(self):
+        a, b = 'a' * 32, 'b' * 32
+        with urlopen(self.url + '/api/config') as response:
+            config = json.load(response)
+            self.assertNotIn('publishEnabled', config)
+            self.assertEqual(config['audioPath'], '/audio')
+            self.assertNotIn('audioPort', config)
+        stroke = self.stroke()
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': 10, 't_end': 20,
+                'enclosed_element': stroke['enclosed_element'], 'strokes': [stroke]}
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'lyceum_apply', return_value={'html': '<html>ok</html>'}) as agent, \
+             patch.object(server, 'pi_edit_schema', return_value={}), \
+             patch.object(server.Path, 'write_text') as write:
+            for path, body in (('/api/marks', mark), ('/api/strokes', stroke),
+                               ('/api/marks/readback', {'id': mark['id']}),
+                               ('/api/strokes/readback', {'id': stroke['id']}),
+                               ('/api/apply', {'bundles': [], 'current_html': '<html></html>'})):
+                self.assertEqual(self.post(path, body)[0], 400, path)
+            self.assertEqual(self.post('/api/marks', {**mark, 'session_id': a})[0], 201)
+            self.assertEqual(self.post('/api/strokes', {**stroke, 'session_id': a})[0], 201)
+            for path in ('/api/marks/readback', '/api/strokes/readback'):
+                self.assertEqual(self.post(path, {'id': mark['id'], 'session_id': b})[0], 404)
+                self.assertEqual(self.post(path, {'id': mark['id'], 'session_id': a})[0], 200)
+                self.assertEqual(self.post(path, {'id': [mark['id']], 'session_id': a})[0], 400)
+            request = {'bundles': [{'strokes': [mark]}], 'current_html': '<html></html>',
+                       'request_id': 'c' * 32}
+            self.assertEqual(self.post('/api/apply', {**request, 'session_id': b})[0], 409)
+            agent.assert_not_called()
+            self.assertEqual(self.post('/api/apply', {**request, 'session_id': a})[0], 200)
+            self.assertEqual(self.post('/api/publish', {'html': '<html>unsafe</html>'})[0], 404)
+            write.assert_not_called()
+
+    def test_public_budget_is_atomic_and_provider_errors_are_private(self):
+        session = 'd' * 32
+        request = {'session_id': session, 'request_id': 'e' * 32,
+                   'bundles': [], 'current_html': '<html></html>'}
+        with patch.object(server, 'PUBLIC_AGENT_REQUEST_LIMIT', 1, create=True), \
+             patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'pi_edit_schema', return_value={'function': {'name': 'edit'}}), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = TimeoutError('PRIVATE PROVIDER TRACE')
+            results = []
+            workers = [threading.Thread(target=lambda: results.append(self.post('/api/apply', request)))
+                       for _ in range(4)]
+            for worker in workers: worker.start()
+            for worker in workers: worker.join()
+            self.assertEqual(opener.return_value.open.call_count, 1)
+            self.assertEqual(len(results), 4)
+            self.assertNotIn('PRIVATE', json.dumps(results))
+            self.assertTrue(all(code in (429, 502) for code, _ in results))
+            # A subsequent request must still see the spent budget on disk.
+            self.assertEqual(self.post('/api/apply', request)[0], 429)
+            self.assertEqual(opener.return_value.open.call_count, 1)
+            with closing(sqlite3.connect(server.PUBLIC_BUDGET_DB)) as db:
+                self.assertEqual(db.execute('SELECT spent FROM budget').fetchone(), (1,))
+
+    def test_public_store_expires_and_bounds_entries(self):
+        a, b = 'a' * 32, 'b' * 32
+        stroke = self.stroke()
+        mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': 10, 't_end': 20,
+                'enclosed_element': stroke['enclosed_element'], 'strokes': [stroke]}
+        with patch.object(server, 'pi_edit_schema', return_value={}), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'lyceum_apply', return_value={'html': '<html>ok</html>'}) as agent:
+            with patch.object(server.time, 'monotonic', return_value=100):
+                self.assertEqual(self.post('/api/marks', {**mark, 'session_id': a})[0], 201)
+                self.assertEqual(self.post('/api/marks', {**mark, 'session_id': b})[0], 201)
+            with patch.object(server.time, 'monotonic', return_value=100 + server.PUBLIC_TTL_SECONDS):
+                self.assertEqual(self.post('/api/marks/readback', {'id': mark['id'], 'session_id': a})[0], 404)
+                self.assertEqual(self.post('/api/apply', {'session_id': b, 'request_id': 'c' * 32,
+                    'bundles': [{'strokes': [mark]}], 'current_html': '<html></html>'})[0], 409)
+                agent.assert_not_called()
+            self.assertFalse(server.MARKS)
+        with server.STROKES_LOCK:
+            server.MARKS.update({(a, str(i)): ({'id': str(i)}, float('inf')) for i in range(500)})
+        self.assertEqual(self.post('/api/marks', {**mark, 'session_id': a})[0], 507)
+        self.assertEqual(len(server.MARKS), 500)
+
+    def test_public_budget_storage_failure_sends_nothing(self):
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(server, 'PUBLIC_BUDGET_DB', Path(root) / 'missing' / 'budget.sqlite3'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'pi_edit_schema', return_value={'function': {'name': 'edit'}}), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            code, body = self.post('/api/apply', {'session_id': 'a' * 32, 'request_id': 'b' * 32,
+                'bundles': [], 'current_html': '<html></html>'})
+            self.assertEqual(code, 500, body)
+            opener.assert_not_called()
+            self.assertNotIn('sqlite', json.dumps(body).lower())
+
+    def test_public_stream_error_has_no_provider_detail_or_prompt(self):
+        request = {'session_id': 'a' * 32, 'request_id': 'b' * 32,
+                   'bundles': [], 'current_html': '<html>SECRET PROMPT</html>'}
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'pi_edit_schema', return_value={'function': {'name': 'edit'}}), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = TimeoutError('PRIVATE PROVIDER TRACE')
+            code, _, events = self.post_stream(request)
+            self.assertEqual(code, 200)
+            self.assertEqual(events[-1], {'type': 'error', 'error': 'Agent request failed'})
+            self.assertEqual(opener.return_value.open.call_count, 3)
+            self.assertNotIn('SECRET PROMPT', json.dumps(events))
+
+    def test_public_stream_reserves_each_model_round_before_second_send(self):
+        request = {'session_id': 'a' * 32, 'request_id': 'b' * 32,
+                   'bundles': [], 'current_html': '<html><body><h1>Old</h1></body></html>'}
+        with patch.object(server, 'PUBLIC_AGENT_REQUEST_LIMIT', 1), \
+             patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = tool_reply()
+            code, _, events = self.post_stream(request)
+            self.assertEqual(code, 200)
+            self.assertEqual([event['type'] for event in events], ['edit', 'error'])
+            self.assertEqual(events[-1]['error'], 'Public agent budget exhausted')
+            self.assertEqual(opener.return_value.open.call_count, 1)
+            with closing(sqlite3.connect(str(server.PUBLIC_BUDGET_DB))) as db:
+                self.assertEqual(db.execute('SELECT spent FROM budget').fetchone(), (1,))
+
+    def test_public_trace_acknowledges_frontend_without_writing_raw_data(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'):
+            code, result = self.post('/api/trace', {'session_id': 'a' * 32,
+                'event': 'session_started', 'data': {'startedAt': 'now'}})
+            self.assertEqual(code, 202, result)
+            self.assertEqual(result['status'], 'ignored')
+            self.assertFalse((Path(root) / 'traces').exists())
+
+    def test_public_trace_schema_and_retention_do_not_copy_untrusted_fields(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(server, 'TRACE_DIR', Path(root) / 'traces'):
+            trace_dir = Path(root) / 'traces'
+            old_session = 'e' * 32
+            server.trace_event(old_session, 'apply_requested', {
+                'request_id': 'f' * 32, 'prompt': 'PRIVATE PROMPT', 'current_html': 'PRIVATE HTML'})
+            old_path = trace_dir / (old_session + '.jsonl')
+            past = time.time() - server.PUBLIC_TRACE_RETENTION_SECONDS - 10
+            os.utime(old_path, (past, past))
+            server.trace_event('a' * 32, 'apply_requested', {'request_id': 'b' * 32})
+            self.assertFalse(old_path.exists())
+            self.assertNotIn('PRIVATE', (trace_dir / ('a' * 32 + '.jsonl')).read_text())
+            server.trace_event('a' * 32, 'provider_attempt_failed', {
+                'request_id': 'b' * 32, 'attempt': 1, 'category': 'transport',
+                'error': 'PRIVATE URL', 'http_status': 503, 'response': 'PRIVATE BODY'})
+            self.assertNotIn('PRIVATE', (trace_dir / ('a' * 32 + '.jsonl')).read_text())
+            self.assertNotIn('http_status', (trace_dir / ('a' * 32 + '.jsonl')).read_text())
+            with self.assertRaises(ValueError):
+                server.trace_event('a' * 32, 'apply_result', {
+                    'request_id': 'b' * 32, 'status': 'PRIVATE INJECTED VALUE'})
+
+    def test_public_apply_trace_persists_only_diagnostic_metadata(self):
+        session, request_id = 'a' * 32, 'b' * 32
+        secret = 'PRIVATE_PAGE_AND_SPEECH'
+        request = {'session_id': session, 'request_id': request_id,
+                   'bundles': [{'transcript': secret, 'strokes': []}],
+                   'current_html': f'<html><body>{secret}</body></html>'}
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'pi_edit_schema', return_value={'function': {'name': 'edit'}}), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = server.urllib.error.HTTPError(
+                'https://private.invalid/token', 503, secret, Message(), None)
+            code, body = self.post('/api/apply', request)
+            self.assertEqual(code, 502, body)
+            trace = Path(root) / 'traces' / (session + '.jsonl')
+            events = [json.loads(line) for line in trace.read_text().splitlines()]
+            self.assertEqual([event['event'] for event in events],
+                             ['apply_requested'] + ['provider_response', 'provider_attempt_failed'] * 3
+                             + ['apply_result'])
+            self.assertEqual([event['data']['http_status'] for event in events
+                              if event['event'] == 'provider_attempt_failed'], [503] * 3)
+            self.assertTrue(all(event['data']['category'] == 'upstream_http' for event in events
+                                if event['event'] == 'provider_attempt_failed'))
+            self.assertEqual(events[-1]['data']['status'], 'failed_after_attempt')
+            self.assertEqual(events[-1]['data']['request_id'], request_id)
+            self.assertNotIn(secret, trace.read_text())
+            self.assertNotIn('token', trace.read_text())
+            self.assertEqual(trace.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(trace.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_public_timeout_trace_and_success_have_no_response_content(self):
+        session, request_id = 'c' * 32, 'd' * 32
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'pi_edit_schema', return_value={'function': {'name': 'edit'}}), \
+             patch.object(server, 'lyceum_apply') as agent:
+            timeout = server.ProviderAnswerError('Agent request failed or timed out')
+            timeout.__cause__ = TimeoutError('PRIVATE DETAIL')
+            agent.side_effect = [timeout, {'html': '<html>SECRET ANSWER</html>'}]
+            code, body = self.post('/api/apply', {'session_id': session, 'request_id': request_id,
+                'bundles': [], 'current_html': '<html><body>PRIVATE INPUT</body></html>'})
+            self.assertEqual(code, 200, body)
+            trace = (Path(root) / 'traces' / (session + '.jsonl')).read_text()
+            events = [json.loads(line) for line in trace.splitlines()]
+            self.assertEqual([event['event'] for event in events],
+                             ['apply_requested', 'provider_attempt_failed', 'apply_result'])
+            self.assertEqual(events[1]['data']['category'], 'timeout')
+            self.assertEqual(events[-1]['data']['status'], 'succeeded')
+            for sensitive in ('PRIVATE', 'SECRET', 'ANSWER'):
+                self.assertNotIn(sensitive, trace)
+
+    def test_public_adapter_failure_is_classified_without_error_text(self):
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
+             patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server, 'AGENT_PROVIDER', 'lyceum'), \
+             patch.object(server, 'pi_edit_schema', return_value={'function': {'name': 'edit'}}), \
+             patch.object(server, 'lyceum_apply', side_effect=server.LocalAdapterError('PRIVATE SPAN')):
+            code, body = self.post('/api/apply', {'session_id': 'a' * 32,
+                'request_id': 'b' * 32, 'bundles': [], 'current_html': '<html></html>'})
+            self.assertEqual(code, 502, body)
+            trace = (Path(root) / 'traces' / ('a' * 32 + '.jsonl')).read_text()
+            self.assertEqual(json.loads(trace.splitlines()[-1])['data']['category'], 'adapter')
+            self.assertNotIn('PRIVATE SPAN', trace)
 
 
 if __name__ == '__main__':

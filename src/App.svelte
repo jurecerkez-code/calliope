@@ -364,7 +364,7 @@
     loadHandCursor();
     const tick=setInterval(()=>now=elapsed(),250);
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
-      audio=createAudio(eq,{port:config.audioPort,onLine:(cls,text)=>{
+      audio=createAudio(eq,{port:config.audioPort,audioPath:config.audioPath,onLine:(cls,text)=>{
         if(/LINK UP/.test(text))audioState='live';
         if(cls==='err')audioState='error';
         if(cls==='inter'){interim=text==='(listening)'?'':text;}else addLine(cls,text);

@@ -20,6 +20,9 @@ from functools import lru_cache
 from html.parser import HTMLParser
 import urllib.request
 import math
+import sqlite3
+import time
+from contextlib import closing
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -88,9 +91,110 @@ def expire_receipts():
             if last_seen < cutoff:
                 seen.pop(key, None)
                 store.pop(key, None)
+PUBLIC_MODE = os.environ.get('CALLIOPE_PUBLIC_MODE') == '1'
+PUBLIC_TTL_SECONDS = 3600
+PUBLIC_AGENT_REQUEST_LIMIT = 60  # Lifetime of the persistent budget database.
+PUBLIC_AUDIO_SESSION_LIMIT = 120
+PUBLIC_BUDGET_DB = Path(os.environ['CALLIOPE_PUBLIC_BUDGET_DB']) if os.environ.get('CALLIOPE_PUBLIC_BUDGET_DB') else None
+PUBLIC_TRACE_RETENTION_SECONDS = 7 * 86400
+
+def public_failure_metadata(error):
+    """Classify a failure without persisting exception text, URLs or response bodies."""
+    cause = error.__cause__
+    if isinstance(cause, urllib.error.HTTPError):
+        return {'category': 'upstream_http', 'http_status': cause.code}
+    if isinstance(cause, TimeoutError):
+        return {'category': 'timeout'}
+    if isinstance(cause, OSError):
+        return {'category': 'transport'}
+    if isinstance(error, MissingSpanExhausted):
+        return {'category': 'missing_span'}
+    if isinstance(error, LocalAdapterError):
+        return {'category': 'adapter'}
+    if isinstance(error, ProviderAnswerError):
+        return {'category': 'provider_answer'}
+    return {'category': 'server'}
+
+def public_trace_data(event, data):
+    """Build public records from a strict schema, never copy request/provider text."""
+    if event not in ('apply_requested', 'provider_response', 'provider_attempt_failed', 'apply_result'):
+        return None
+    record = {'request_id': data.get('request_id')}
+    if not isinstance(record['request_id'], str) or not TRACE_ID.fullmatch(record['request_id']):
+        raise ValueError('invalid trace request id')
+    if event in ('provider_response', 'provider_attempt_failed'):
+        attempt = data.get('attempt')
+        if type(attempt) is not int or not 1 <= attempt <= 3:
+            raise ValueError('invalid trace attempt')
+        record['attempt'] = attempt
+    if event == 'provider_attempt_failed':
+        category = data.get('category')
+        if category not in ('upstream_http', 'timeout', 'transport', 'missing_span',
+                            'adapter', 'provider_answer', 'server'):
+            raise ValueError('invalid trace category')
+        record['category'] = category
+        status = data.get('http_status')
+        if type(status) is int and 400 <= status <= 599 and category == 'upstream_http':
+            record['http_status'] = status
+        duration = data.get('attempt_ms')
+        if type(duration) is int and 0 <= duration <= 600_000:
+            record['attempt_ms'] = duration
+    if event == 'apply_result':
+        status = data.get('status')
+        if status not in ('succeeded', 'not_sent', 'failed_after_attempt', 'budget_exhausted'):
+            raise ValueError('invalid trace status')
+        record['status'] = status
+        if status in ('not_sent', 'failed_after_attempt'):
+            category = data.get('category')
+            if category in ('upstream_http', 'timeout', 'transport', 'missing_span',
+                            'adapter', 'provider_answer', 'server'):
+                record['category'] = category
+                http_status = data.get('http_status')
+                if category == 'upstream_http' and type(http_status) is int and 400 <= http_status <= 599:
+                    record['http_status'] = http_status
+    return record
+
+class PublicBudgetExhausted(Exception):
+    pass
+
+def public_session(payload):
+    return (isinstance(payload, dict) and isinstance(payload.get('session_id'), str)
+            and TRACE_ID.fullmatch(payload['session_id']))
+
+def public_prune(store):
+    now = time.monotonic()
+    for key, (_, expires) in list(store.items()):
+        if expires <= now:
+            del store[key]
+
+def public_send_allowed():
+    _public_reserve('budget', PUBLIC_AGENT_REQUEST_LIMIT)
+
+def public_audio_allowed():
+    _public_reserve('audio_budget', PUBLIC_AUDIO_SESSION_LIMIT)
+
+def _public_reserve(table, limit):
+    # SQLite serializes reservations across HTTP threads and server restarts.
+    # Database failures reject the send; a reservation is never refunded.
+    if (PUBLIC_BUDGET_DB is None or not PUBLIC_BUDGET_DB.is_absolute() or
+            PUBLIC_BUDGET_DB.resolve().is_relative_to(HERE.resolve())):
+        raise OSError('persistent public budget path required outside release')
+    with closing(sqlite3.connect(PUBLIC_BUDGET_DB, timeout=5)) as db:
+        with db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute(f'CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY CHECK (id = 1), spent INTEGER NOT NULL)')
+            db.execute(f'INSERT OR IGNORE INTO {table} VALUES (1, 0)')
+            spent = db.execute(f'SELECT spent FROM {table} WHERE id = 1').fetchone()[0]
+            if spent >= limit:
+                raise PublicBudgetExhausted()
+            db.execute(f'UPDATE {table} SET spent = spent + 1 WHERE id = 1')
 
 def trace_event(session_id, event, data):
-    """Append one private, durable JSON line; never write credentials or audio."""
+    """Append a private trace or content-free public diagnostic JSON line."""
+    if PUBLIC_MODE:
+        data = public_trace_data(event, data)
+        if data is None:
+            return  # Anonymous frontend events and raw mark/import records stay unlogged.
     if session_id is None:
         return  # Legacy clients have no session identity.
     if not isinstance(session_id, str) or not TRACE_ID.fullmatch(session_id):
@@ -105,6 +209,14 @@ def trace_event(session_id, event, data):
             raise OSError('trace directory is not a regular directory')
         TRACE_DIR.chmod(0o700)
         path = TRACE_DIR / (session_id + '.jsonl')
+        if PUBLIC_MODE:
+            cutoff = time.time() - PUBLIC_TRACE_RETENTION_SECONDS
+            for item in TRACE_DIR.iterdir():
+                if not re.fullmatch(r'[a-f0-9]{32}\.jsonl', item.name):
+                    continue
+                info = item.stat(follow_symlinks=False)
+                if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_mtime < cutoff:
+                    item.unlink()
         if not os.path.lexists(path) and sum(1 for item in TRACE_DIR.iterdir()
                                             if item.name.endswith('.jsonl')) >= TRACE_SESSION_LIMIT:
             raise OSError('trace session limit reached')
@@ -578,6 +690,8 @@ def agent_apply(bundles: list, current_html: str, prompt: str | None = None,
                 headers={'Authorization': f'Bearer {key}', 'content-type': 'application/json'})
         else:
             raise ValueError('invalid agent provider')
+        if PUBLIC_MODE:
+            public_send_allowed()
         try:
             with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as response:
                 raw = response.read(MAX_PROVIDER_BYTES + 1)
@@ -718,7 +832,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/config':
-            self._send(200, {'audioPort': AUDIO_PORT})
+            self._send(200, {'audioPath': '/audio'} if PUBLIC_MODE else {'audioPort': AUDIO_PORT})
         elif self.path.startswith('/assets/') and ASSET_NAME.fullmatch(self.path[len('/assets/'):]):
             file = ASSETS / self.path[len('/assets/'):]
             if not file.is_file() or file.is_symlink() or file.stat().st_size > 2_000_000 or file.resolve().parent != ASSETS.resolve():
@@ -779,6 +893,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send(400, {"error": f"bad json: {e}"})
             return
+        if PUBLIC_MODE and self.path in ('/api/marks', '/api/marks/readback',
+                '/api/strokes', '/api/strokes/readback', '/api/apply') and not public_session(payload):
+            return self._send(400, {'error': 'session_id required'})
+        if PUBLIC_MODE and self.path in ('/api/marks/readback', '/api/strokes/readback') and (
+                not isinstance(payload.get('id'), str) or
+                not re.fullmatch(r'[\w-]{1,80}', payload['id'])):
+            return self._send(400, {'error': 'invalid id'})
         if self.path == '/api/trace':
             if (not isinstance(payload, dict) or payload.get('event') not in TRACE_FIELDS or
                     not isinstance(payload.get('data'), dict) or
@@ -788,11 +909,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {'error': 'invalid trace event'})
             if len(json.dumps(payload['data'])) > 470_000:
                 return self._send(413, {'error': 'trace event too large'})
-            try:
-                trace_event(payload['session_id'], payload['event'], payload['data'])
-            except OSError:
-                return self._send(507, {'error': 'trace write failed'})
-            self._send(202, {'status': 'recorded'})
+            if not PUBLIC_MODE:
+                try:
+                    trace_event(payload['session_id'], payload['event'], payload['data'])
+                except OSError:
+                    return self._send(507, {'error': 'trace write failed'})
+            self._send(202, {'status': 'ignored' if PUBLIC_MODE else 'recorded'})
         elif self.path == '/api/import':
             if not IMPORT_SLOTS.acquire(blocking=False):
                 return self._send(429, {'error': 'too many imports in progress'})
@@ -814,22 +936,32 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 IMPORT_SLOTS.release()
         elif self.path == '/api/strokes':
-            if not valid_stroke(payload):
+            stroke = {k: v for k, v in payload.items() if k != 'session_id'} if PUBLIC_MODE else payload
+            if not valid_stroke(stroke):
                 return self._send(400, {'error': 'invalid stroke'})
             with STROKES_LOCK:
-                expire_receipts()
-                if len(STROKES) >= 500 and payload['id'] not in STROKES:
+                if PUBLIC_MODE:
+                    public_prune(STROKES)
+                else:
+                    expire_receipts()
+                key = (payload['session_id'], stroke['id']) if PUBLIC_MODE else stroke['id']
+                if len(STROKES) >= 500 and key not in STROKES:
                     return self._send(507, {'error': 'stroke store full'})
-                if payload['id'] in STROKES and STROKES[payload['id']] != payload:
+                if key in STROKES and (STROKES[key][0] if PUBLIC_MODE else STROKES[key]) != stroke:
                     return self._send(409, {'error': 'id conflict'})
-                STROKES[payload['id']] = payload
-                STROKE_SEEN[payload['id']] = time.monotonic()
-            self._send(201, {'id': payload['id'], 'status': 'accepted'})
+                STROKES[key] = (stroke, time.monotonic() + PUBLIC_TTL_SECONDS) if PUBLIC_MODE else stroke
+                if not PUBLIC_MODE:
+                    STROKE_SEEN[key] = time.monotonic()
+            self._send(201, {'id': stroke['id'], 'status': 'accepted'})
         elif self.path == '/api/strokes/readback':
             with STROKES_LOCK:
-                expire_receipts()
-                stroke = STROKES.get(payload.get('id'))
-                if stroke:
+                if PUBLIC_MODE:
+                    public_prune(STROKES)
+                else:
+                    expire_receipts()
+                entry = STROKES.get((payload['session_id'], payload.get('id')) if PUBLIC_MODE else payload.get('id'))
+                stroke = entry[0] if PUBLIC_MODE and entry else entry
+                if stroke and not PUBLIC_MODE:
                     STROKE_SEEN[payload['id']] = time.monotonic()
             self._send(200, {'stroke': stroke}) if stroke else self._send(404, {'error': 'not found'})
         elif self.path == '/api/marks':
@@ -840,46 +972,65 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {'error': 'invalid trace session id'})
             payload = {key: value for key, value in payload.items() if key != 'session_id'}
             with STROKES_LOCK:
-                expire_receipts()
-                if len(MARKS) >= 500 and payload['id'] not in MARKS:
+                if PUBLIC_MODE:
+                    public_prune(MARKS)
+                else:
+                    expire_receipts()
+                key = (session_id, payload['id']) if PUBLIC_MODE else payload['id']
+                if len(MARKS) >= 500 and key not in MARKS:
                     return self._send(507, {'error': 'mark store full'})
-                if payload['id'] in MARKS and MARKS[payload['id']] != payload:
+                if key in MARKS and (MARKS[key][0] if PUBLIC_MODE else MARKS[key]) != payload:
                     return self._send(409, {'error': 'id conflict'})
                 try:
                     trace_event(session_id, 'mark_accepted', {'mark': payload,
                         'receipt': agent_sketch_message(payload)})
                 except OSError:
                     return self._send(507, {'error': 'trace write failed; mark not accepted'})
-                MARKS[payload['id']] = payload
-                MARK_SEEN[payload['id']] = time.monotonic()
+                MARKS[key] = (payload, time.monotonic() + PUBLIC_TTL_SECONDS) if PUBLIC_MODE else payload
+                if not PUBLIC_MODE:
+                    MARK_SEEN[key] = time.monotonic()
             self._send(201, {'id': payload['id'], 'status': 'accepted',
                              'agent_message': agent_sketch_message(payload)})
         elif self.path == '/api/marks/readback':
             with STROKES_LOCK:
-                expire_receipts()
-                mark = MARKS.get(payload.get('id'))
-                if mark:
+                if PUBLIC_MODE:
+                    public_prune(MARKS)
+                else:
+                    expire_receipts()
+                entry = MARKS.get((payload['session_id'], payload.get('id')) if PUBLIC_MODE else payload.get('id'))
+                mark = entry[0] if PUBLIC_MODE and entry else entry
+                if mark and not PUBLIC_MODE:
                     MARK_SEEN[payload['id']] = time.monotonic()
             self._send(200, {'mark': mark}) if mark else self._send(404, {'error': 'not found'})
         elif self.path == "/api/apply":
             prompt = None
             agent_attempted = False
-            streaming = payload.get('stream') is True
+            streaming = isinstance(payload, dict) and payload.get('stream') is True
             stream_started = False
             session_id = payload.get('session_id') if isinstance(payload, dict) else None
             request_id = payload.get('request_id') if isinstance(payload, dict) else None
             if session_id is not None and (not isinstance(session_id, str) or not TRACE_ID.fullmatch(session_id) or
                 not isinstance(request_id, str) or not TRACE_ID.fullmatch(request_id)):
                 return self._send(400, {'error': 'invalid trace request id'})
+            if PUBLIC_MODE and (not isinstance(request_id, str) or not TRACE_ID.fullmatch(request_id)):
+                return self._send(400, {'error': 'request_id required'})
             try:
                 strokes = [s for b in payload.get('bundles', []) for s in b.get('strokes', [])]
                 with STROKES_LOCK:
-                    expire_receipts()
-                    if any((MARKS if isinstance(s.get('strokes'), list) else STROKES).get(s.get('id')) != s for s in strokes):
+                    if PUBLIC_MODE:
+                        public_prune(MARKS)
+                        public_prune(STROKES)
+                    else:
+                        expire_receipts()
+                    if any(((entry[0] if entry else None) if PUBLIC_MODE else entry) != s
+                           for s in strokes
+                           for entry in [(MARKS if isinstance(s.get('strokes'), list) else STROKES).get(
+                               (session_id, s.get('id')) if PUBLIC_MODE else s.get('id'))]):
                         return self._send(409, {'error': 'mark not accepted by backend; retry delivery'})
-                    for stroke in strokes:
-                        seen = MARK_SEEN if isinstance(stroke.get('strokes'), list) else STROKE_SEEN
-                        seen[stroke['id']] = time.monotonic()
+                    if not PUBLIC_MODE:
+                        for stroke in strokes:
+                            seen = MARK_SEEN if isinstance(stroke.get('strokes'), list) else STROKE_SEEN
+                            seen[stroke['id']] = time.monotonic()
                 if not valid_relations(payload.get('relations', []), strokes):
                     return self._send(400, {'error': 'invalid arrow relation for accepted marks'})
                 bundles, html = payload.get('bundles', []), payload.get('current_html', '')
@@ -889,14 +1040,15 @@ class Handler(BaseHTTPRequestHandler):
                     'current_html': html, 'prompt': prompt})
                 provider = ('claude' if ANTHROPIC_KEY else 'lyceum') if AGENT_PROVIDER == 'auto' else AGENT_PROVIDER
                 if provider not in ('claude', 'lyceum', 'openrouter'):
-                    return self._send(400, {'error': 'invalid AGENT_PROVIDER'})
+                    return self._send(400, {'error': 'Agent unavailable' if PUBLIC_MODE else 'invalid AGENT_PROVIDER'})
                 key = {'claude': ANTHROPIC_KEY, 'lyceum': LYCEUM_KEY,
                        'openrouter': OPENROUTER_KEY}[provider]
                 if not key:
                     trace_event(session_id, 'apply_result', {'request_id': request_id,
                         'status': 'not_sent', 'error': 'agent key unavailable'})
-                    return self._send(503, {'error': 'Agent APPLY unavailable: no API key configured',
-                                            'agent_message': prompt})
+                    return self._send(503, {'error': 'Agent APPLY unavailable' if PUBLIC_MODE else
+                                            'Agent APPLY unavailable: no API key configured',
+                                            **({} if PUBLIC_MODE else {'agent_message': prompt})})
                 # Local input/schema failures cannot improve by calling the provider again.
                 validate_document(html)
                 pi_edit_schema()
@@ -910,6 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
                 for attempt in range(1, 4):
                     responses = []
                     safe_miss_seen = []
+                    attempt_started = time.monotonic()
                     try:
                         out = apply_provider(bundles, html, prompt=prompt,
                                              on_response=responses.append,
@@ -923,14 +1076,18 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(error, MissingSpanExhausted):
                             trace_event(session_id, 'provider_attempt_failed',
                                 {'request_id': request_id, 'attempt': attempt,
-                                 'error': str(error)[:1000]})
+                                 'error': str(error)[:1000],
+                                 'attempt_ms': int((time.monotonic() - attempt_started) * 1000),
+                                 **public_failure_metadata(error)})
                         raise
                     except ProviderAnswerError as error:
                         for response in responses:
                             trace_event(session_id, 'provider_response',
                                 {'request_id': request_id, 'attempt': attempt, 'response': response})
                         trace_event(session_id, 'provider_attempt_failed',
-                            {'request_id': request_id, 'attempt': attempt, 'error': str(error)[:1000]})
+                            {'request_id': request_id, 'attempt': attempt, 'error': str(error)[:1000],
+                             'attempt_ms': int((time.monotonic() - attempt_started) * 1000),
+                             **public_failure_metadata(error)})
                         if attempt == 3 or safe_miss_seen:
                             raise
                     else:
@@ -941,7 +1098,8 @@ class Handler(BaseHTTPRequestHandler):
                 assert out is not None
                 trace_event(session_id, 'apply_result', {'request_id': request_id,
                     'status': 'succeeded', 'response': out})
-                out['agent_message'] = prompt
+                if not PUBLIC_MODE:
+                    out['agent_message'] = prompt
                 if streaming:
                     self._stream_event('done', **out)
                 else:
@@ -950,43 +1108,75 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     trace_event(session_id, 'apply_result', {'request_id': request_id,
                         'status': 'failed_after_attempt' if agent_attempted else 'not_sent',
-                        'error': str(e)[:1000]})
+                        'error': str(e)[:1000], **public_failure_metadata(e)})
                 except (OSError, ValueError):
                     pass
                 if stream_started:
-                    self._stream_event('error', error=str(e))
+                    self._stream_event('error', error='Agent request failed' if PUBLIC_MODE else str(e))
                 else:
-                    self._send(502, {'error': str(e), 'agent_message': prompt})
+                    self._send(502, {'error': 'Agent request failed' if PUBLIC_MODE else str(e),
+                                     **({} if PUBLIC_MODE else {'agent_message': prompt})})
+            except PublicBudgetExhausted:
+                trace_event(session_id, 'apply_result', {'request_id': request_id,
+                    'status': 'budget_exhausted'})
+                if stream_started:
+                    self._stream_event('error', error='Public agent budget exhausted')
+                else:
+                    self._send(429, {'error': 'Public agent budget exhausted'})
             except Exception as e:  # surface the error to the UI, never crash the demo
                 try:
                     trace_event(session_id, 'apply_result', {'request_id': request_id,
                         'status': 'failed_after_attempt' if agent_attempted else 'not_sent',
-                        'error': str(e)[:1000]})
+                        'error': str(e)[:1000], **public_failure_metadata(e)})
                 except (OSError, ValueError):
                     pass
                 if stream_started:
-                    self._stream_event('error', error=str(e))
+                    self._stream_event('error', error='Agent unavailable' if PUBLIC_MODE else str(e))
                 else:
-                    self._send(500, {"error": str(e), 'agent_message': prompt})
+                    self._send(500, {'error': 'Agent unavailable' if PUBLIC_MODE else str(e),
+                                     **({} if PUBLIC_MODE else {'agent_message': prompt})})
         else:
             self._send(404, {"error": "not found"})
 
 
 def run_http():
-    ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler).serve_forever()
+    bind_host = os.environ.get('CALLIOPE_BIND_HOST', '127.0.0.1')
+    ThreadingHTTPServer((bind_host, HTTP_PORT), Handler).serve_forever()
 
 
 # ---------- audio relay: browser <-> Reson8 turns ----------
+PUBLIC_AUDIO_SECONDS = 60
+PUBLIC_AUDIO_BYTES = 2_000_000
+PUBLIC_AUDIO_SLOTS = asyncio.Semaphore(2)
+
 async def audio_ws(websocket):
+    if PUBLIC_MODE:
+        request = websocket.request
+        if (not STUDIO_ORIGIN or request.headers.get('Origin') != STUDIO_ORIGIN or
+                request.path != '/audio'):
+            await websocket.close(code=1008, reason='Audio origin not allowed')
+            return
+        if PUBLIC_AUDIO_SLOTS.locked():
+            await websocket.close(code=1013, reason='Audio busy')
+            return
     if not RESON8_KEY:
-        await websocket.send(json.dumps({"error": "RESON8_API_KEY not set"}))
+        await websocket.send(json.dumps({"error": "Audio unavailable" if PUBLIC_MODE else "RESON8_API_KEY not set"}))
         return
     try:
-        await _relay(websocket)
+        if PUBLIC_MODE:
+            async with PUBLIC_AUDIO_SLOTS:
+                try:
+                    await asyncio.to_thread(public_audio_allowed)
+                except (OSError, sqlite3.Error, PublicBudgetExhausted):
+                    await websocket.close(code=1013, reason='Audio unavailable')
+                    return
+                async with asyncio.timeout(PUBLIC_AUDIO_SECONDS):
+                    await _relay(websocket)
+        else:
+            await _relay(websocket)
     except Exception as e:
-        # always tell the UI why the stream died
         try:
-            await websocket.send(json.dumps({"error": f"reson8 relay: {e}"}))
+            await websocket.send(json.dumps({"error": "Audio session ended" if PUBLIC_MODE else f"reson8 relay: {e}"}))
         except Exception:
             pass
 
@@ -995,10 +1185,15 @@ async def _relay(websocket):
     async with websockets.connect(
         RESON8_TURNS,
         additional_headers={"Authorization": f"ApiKey {RESON8_KEY}"},
-        max_size=None,
+        max_size=65_536 if PUBLIC_MODE else None,
     ) as r8:
         async def up():
+            total = 0
             async for msg in websocket:
+                if PUBLIC_MODE:
+                    total += len(msg.encode() if isinstance(msg, str) else msg)
+                    if total > PUBLIC_AUDIO_BYTES:
+                        raise ValueError('audio limit exceeded')
                 await r8.send(msg)
 
         async def down():
@@ -1011,14 +1206,19 @@ async def _relay(websocket):
         )
         for p in pending:
             p.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for task in done:
+            task.result()
 
 
 async def main():
     threading.Thread(target=run_http, daemon=True).start()
-    print(f"UI on http://127.0.0.1:{HTTP_PORT}  audio ws on :{AUDIO_PORT}")
+    bind_host = os.environ.get('CALLIOPE_BIND_HOST', '127.0.0.1')
+    print(f"UI on http://{bind_host}:{HTTP_PORT}  audio ws on :{AUDIO_PORT}")
     provider = ('Claude' if ANTHROPIC_KEY else 'Lyceum' if LYCEUM_KEY else 'unavailable') if AGENT_PROVIDER == 'auto' else AGENT_PROVIDER
     print(f"Reson8 key: {'set' if RESON8_KEY else 'MISSING'}  Agent: {provider}")
-    async with websockets.serve(audio_ws, "127.0.0.1", AUDIO_PORT, max_size=None):
+    async with websockets.serve(audio_ws, bind_host, AUDIO_PORT,
+                                max_size=65_536 if PUBLIC_MODE else None):
         await asyncio.Future()
 
 

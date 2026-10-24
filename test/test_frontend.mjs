@@ -5,7 +5,15 @@ import { websiteRelations } from '../src/diagram.js';
 import { describeSketch } from '../src/shape.js';
 import { makeMark, createMarkQueue, MARK_SETTLE_DELAY_MS } from '../src/marks.js';
 import { readFileSync } from 'node:fs';
-import { createAudio } from '../src/audio.js';
+import { createAudio, audioWebSocketUrl } from '../src/audio.js';
+
+test('public audio uses a same-origin HTTPS WebSocket path without a second exposed port', () => {
+  assert.equal(audioWebSocketUrl({protocol:'https:',host:'calliope.example.org',hostname:'calliope.example.org'}, {audioPath:'/audio'}),
+    'wss://calliope.example.org/audio');
+  assert.equal(audioWebSocketUrl({protocol:'http:',host:'127.0.0.1:8800',hostname:'127.0.0.1'}, {audioPort:8801}),
+    'ws://127.0.0.1:8801');
+  assert.throws(() => audioWebSocketUrl({protocol:'https:',host:'calliope.example.org',hostname:'calliope.example.org'}, {audioPath:'//evil.example'}));
+});
 
 test('branded loading screen finishes without the retired 3D renderer', () => {
   const loader = readFileSync(new URL('../src/Loader.svelte', import.meta.url), 'utf8');

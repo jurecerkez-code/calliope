@@ -1,0 +1,11 @@
+*
+!Dockerfile.public
+!package.json
+!package-lock.json
+!server.py
+!import_site.py
+!pi_edit_adapter.mjs
+!dist/
+!dist/**
+!assets/
+!assets/**
