@@ -5,6 +5,8 @@
   let visible = $state(true);
   let fading = $state(false);
   let threeDimensional = $state(false);
+  let progress = $state(8);
+  const advance = to => { progress = Math.max(progress, to); };
   function finish() {
     if (fading) return;
     fading = true;
@@ -12,6 +14,11 @@
   }
   onMount(() => {
     const fallback = setTimeout(finish, 9000);
+    const startedAt = performance.now();
+    const barTimer = setInterval(() => {
+      const t = Math.min(1, (performance.now() - startedAt) / 4500);
+      advance(Math.min(92, 8 + 84 * (1 - (1 - t) * (1 - t))));
+    }, 120);
     const onKey = event => {
       if (['Enter', ' ', 'Escape'].includes(event.key)) finish();
     };
@@ -19,9 +26,10 @@
     const loaderUrl = '/loader3d.js';
     import(/* @vite-ignore */ loaderUrl).then(module => module.start(canvas, () => {
       threeDimensional = true;
+      advance(100);
       finish();
     })).catch(() => {});
-    return () => { clearTimeout(fallback); window.removeEventListener('keydown', onKey); };
+    return () => { clearTimeout(fallback); clearInterval(barTimer); window.removeEventListener('keydown', onKey); };
   });
 </script>
 
@@ -30,14 +38,15 @@
     <div class="vd-stage">
       <canvas id="vd3d" bind:this={canvas}></canvas>
       <div class="vd-tiles" aria-hidden="true">
-        <div class="vd-tile"><img src="/assets/reson8-logo.png" alt=""></div>
-        <div class="vd-tile"><span class="vd-te">{'{Tech: Europe}'}</span></div>
-        <div class="vd-tile"><img src="/assets/lyceum-wordmark.svg" alt=""></div>
+        <div class="vd-tile"><img src="/assets/render-jamiej.png" alt=""></div>
+        <div class="vd-tile"><img src="/assets/render-reson8.png" alt=""></div>
+        <div class="vd-tile"><img src="/assets/render-techeurope.png" alt=""></div>
+        <div class="vd-tile"><img src="/assets/render-anthropica.png" alt=""></div>
       </div>
     </div>
     <h1 class="vd-title">CALLIOPE</h1>
     <p class="vd-sub">SPEAK + DRAW ON THE WEBSITE // THE AGENT SEES BOTH</p>
-    <div class="vd-bar"><i id="vdProg"></i></div>
+    <div class="vd-bar"><i id="vdProg" style="width:{progress}%"></i></div>
     <p class="vd-status">LOADING THE STUDIO</p>
     <p class="vd-skip">CLICK ANYWHERE TO SKIP</p>
   </div>

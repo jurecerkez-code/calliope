@@ -144,8 +144,6 @@ export function start(canvas, finish) {
 
     const loaderEl = document.getElementById('vd-loader');
     if (loaderEl) loaderEl.classList.add('vd-3d');
-    const prog = document.getElementById('vdProg');
-    if (prog) prog.style.width = '100%';
 
     function resize() {
       const w = canvas.clientWidth, h = canvas.clientHeight;
