@@ -323,6 +323,14 @@ test('startup offers website import or a blank canvas without loading a demo sit
   assert.doesNotMatch(app, /fetch\('\/jamie-mock\.html'\)/);
 });
 
+test('empty website import uses the visible Jamie default, without importing on startup', () => {
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /const DEFAULT_WEBSITE_URL = 'https:\/\/www\.meetjamie\.ai\/'/);
+  assert.match(app, /JSON\.stringify\(\{url:url\.trim\(\) \|\| DEFAULT_WEBSITE_URL\}\)/);
+  assert.match(app, /id="startUrl"[^>]*placeholder=\{DEFAULT_WEBSITE_URL\}/);
+  assert.doesNotMatch(app, /onMount\(\(\)=>\{[^]*?importUrl\(/);
+});
+
 test('recording artifact keeps words and marks on one clock, as markdown plus JSON', async () => {
   const { buildArtifact } = await import('../src/modes.js');
   assert.equal(buildArtifact([]), '');
