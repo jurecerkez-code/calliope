@@ -11,6 +11,7 @@
   import { buildDiagram, buildCanvasPacket, canvasPacketText, websiteRelations, describeRelation } from './diagram.js';
   import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
   import { buildArtifact, createLiveQueue, eventsForMode, awaitingMoveArrow, nextLiveEvents } from './modes.js';
+  const DEFAULT_WEBSITE_URL = 'https://www.meetjamie.ai/';
   let feed, prev, eq, boardEl, detailDialog;
   let detailField = $state(null);
   let selectedRow = $state(null);
@@ -116,7 +117,7 @@
     if(busy)return;
     busy=true;importError='';status='IMPORTING WEBSITE...';
     try{
-      const response=await fetch('/api/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})});
+      const response=await fetch('/api/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:url.trim() || DEFAULT_WEBSITE_URL})});
       const out=await response.json();
       if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
       await markQueue.flush();
@@ -302,7 +303,7 @@
     <div class="startup-heading"><span>NEW SESSION / 01</span><h1>WHAT ARE WE WORKING ON?</h1><p>BRING A PUBLIC WEB PAGE, OR START WITH NOTHING BUT A CANVAS.</p></div>
     <div class="startup-options">
       <section class="startup-option"><span class="option-number">01 / WEBSITE</span><h2>START WITH A PAGE</h2><p>PASTE A PUBLIC URL. WE'LL BRING A SAFE PREVIEW INTO THE STUDIO.</p>
-        <form onsubmit={importUrl}><Input id="startUrl" aria-label="Website URL" placeholder="https://example.com" bind:value={url} /><Button type="submit" variant="amber" disabled={busy}>IMPORT WEBSITE ↗</Button></form>
+        <form onsubmit={importUrl}><Input id="startUrl" aria-label="Website URL" placeholder={DEFAULT_WEBSITE_URL} bind:value={url} /><Button type="submit" variant="amber" disabled={busy}>IMPORT WEBSITE ↗</Button></form>
         {#if importError}<p class="startup-error" role="alert">IMPORT FAILED: {importError}</p>{/if}
       </section>
       <section class="startup-option"><span class="option-number">02 / CANVAS</span><h2>START FROM BLANK</h2><p>DRAW AND EXPLAIN A CONCEPT. NO WEBSITE NEEDED.</p>
