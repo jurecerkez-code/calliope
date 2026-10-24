@@ -166,18 +166,6 @@
       addLine('err','CLIPBOARD BLOCKED. DOWNLOADED calliope-recording.md INSTEAD.');
     }
   }
-  async function publish(){
-    status='STAGING...';busy=true;
-    try{
-      const response=await fetch('/api/publish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({html:currentHtml})});
-      const out=await response.json();
-      if(!response.ok||out.error)throw new Error(out.error||'HTTP '+response.status);
-      addLine('fin','STAGED: '+out.path);
-      addLine('fin','DEPLOY WHEN READY: '+out.command);
-      status='STAGED. RUN THE COMMAND TO GO LIVE.';
-    }catch(err){addLine('err','PUBLISH FAILED: '+err.message);status='STAGING FAILED.';}
-    finally{busy=false;}
-  }
   function recompute(){
     const d=buildDiagram(board.strokes(),canvasUtts);
     board.setLabels(d);nodes=d.nodes;edges=d.edges;
@@ -318,8 +306,7 @@
         <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
       {:else if operation==='live'}
         <Button id="btnApply" variant="amber" disabled={busy} onclick={() => apply(true)}>APPLY ▸</Button>
-        {#if publishEnabled}<Button id="btnPublish" disabled={busy} onclick={publish}>PUBLISH</Button>{/if}
-        <div class="notice">LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW WITH ITS MARKS. APPLY SENDS MARKS WITHOUT SPEECH. {publishEnabled?'PUBLISH STAGES LOCALLY; DEPLOY IS SEPARATE.':'REVIEW ONLY — APPLY SHOWS THE PREPARED MESSAGE, NOT A LIVE AGENT EDIT.'}</div>
+        <div class="notice">LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW WITH ITS MARKS. APPLY SENDS MARKS WITHOUT SPEECH. {#if !publishEnabled}REVIEW ONLY — APPLY SHOWS THE PREPARED MESSAGE, NOT A LIVE AGENT EDIT.{/if}</div>
       {:else}
         <Button id="btnCopy" variant="amber" onclick={copyArtifact}>COPY ARTIFACT</Button>
         <div class="notice">RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.</div>

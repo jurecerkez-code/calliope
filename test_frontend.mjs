@@ -185,12 +185,12 @@ test('bundled shape interpreter keeps the enclosed DOM target and natural-langua
   assert.equal(payload.pts.length,25);
 });
 
-test('Calliope retains its brand and staged publish control in the migrated studio', () => {
+test('Calliope retains its brand and preview controls without a publish action', () => {
   const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /CALLIOPE \/\/ SPEAK \+ DRAW/);
-  assert.match(app, /\/api\/publish/);
-  assert.match(app, /PUBLISH/);
-  assert.match(app, /\{#if publishEnabled\}<Button id="btnPublish" disabled=\{busy\}/);
+  assert.match(app, /id="btnApply"/);
+  assert.doesNotMatch(app, /id="btnPublish"|\/api\/publish|async function publish\(/);
+  assert.match(app, /LIVE: EACH SPOKEN TURN CHANGES THE PREVIEW/);
   assert.match(app, /REVIEW ONLY/);
   assert.match(app, /ack\.agent_message/);
   assert.match(app, /AGENT SKETCH CONTEXT/);
