@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {"build": "vite build", "test": "node --test test_frontend.mjs test_rough_payload.mjs test_shape_recognition.js"},
+  "dependencies": {
+    "bits-ui": "^2.20.2",
+    "shape-detector": "0.2.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "svelte": "^5.57.2",
+    "vite": "^7.3.7"
+  }
+}
