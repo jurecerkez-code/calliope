@@ -1,47 +1,9 @@
-// VoiceDraw loading screen: 3 shiny spinning sponsor logos (Reson8, {Tech: Europe}, Anthropic)
-// in glass/chrome tiles. Upgrades the CSS splash to real 3D when WebGL is available.
+// Calliope loading screen: 4 chrome-glass sponsor logos (Jamie, Reson8, {Tech: Europe},
+// Anthropic) as real 3D meshes exported from the team's Blender scene (assets/logos.glb),
+// mounted on dark glass tiles. Upgrades the CSS splash to real 3D when WebGL is available.
 import * as THREE from 'three';
 import { RoomEnvironment } from './vendor/RoomEnvironment.js';
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
-}
-
-// recolor any logo to white, keeping alpha (works for dark or colored marks)
-function whiteTexture(source, w, h) {
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const x = c.getContext('2d');
-  if (source instanceof HTMLCanvasElement) {
-    x.drawImage(source, 0, 0, w, h);
-  } else {
-    x.drawImage(source, 0, 0, w, h);
-  }
-  x.globalCompositeOperation = 'source-in';
-  x.fillStyle = '#ffffff';
-  x.fillRect(0, 0, w, h);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
-  return tex;
-}
-
-function techeuropeCanvas() {
-  const c = document.createElement('canvas');
-  c.width = 1400; c.height = 360;
-  const x = c.getContext('2d');
-  x.fillStyle = '#fff';
-  x.font = "bold 148px 'Cascadia Mono','SF Mono',Consolas,monospace";
-  x.textAlign = 'center';
-  x.textBaseline = 'middle';
-  x.fillText('{Tech: Europe}', c.width / 2, c.height / 2);
-  return c;
-}
+import { GLTFLoader } from './vendor/GLTFLoader.js';
 
 function roundedRect(w, h, r) {
   const s = new THREE.Shape();
@@ -104,35 +66,32 @@ export function start(canvas, finish) {
     envMapIntensity: 1.6
   });
 
-  Promise.all([
-    loadImage('assets/reson8-logo.png'),
-    loadImage('assets/anthropic-a.svg')
-  ]).then(([reson8Img, anthropicImg]) => {
-    const logos = [
-      { tex: whiteTexture(reson8Img, 1024, 171), w: 1.72, h: 1.72 * 105 / 628 },
-      { tex: whiteTexture(techeuropeCanvas(), 1400, 360), w: 1.72, h: 1.72 * 360 / 1400 },
-      { tex: whiteTexture(anthropicImg, 512, 512), w: 1.15, h: 1.15 }
-    ];
+  new GLTFLoader().load('assets/logos.glb', (gltf) => {
+    const names = ['JamieJ', 'Reson8', 'TechEurope', 'AnthropicA'];
     const groups = [];
-    logos.forEach((L, i) => {
+    names.forEach((name, i) => {
       const g = new THREE.Group();
       const tile = new THREE.Mesh(tileGeo, tileMat);
       g.add(tile);
-      const face = new THREE.Mesh(
-        new THREE.PlaneGeometry(L.w, L.h),
-        new THREE.MeshBasicMaterial({ map: L.tex, transparent: true, toneMapped: false })
-      );
-      face.position.z = 0.185;
-      g.add(face);
-      g.position.x = (i - 1) * 2.72;
+      const src = gltf.scene.getObjectByName(name);
+      if (src) {
+        const logo = src.clone(true);
+        const box = new THREE.Box3().setFromObject(logo);
+        const size = new THREE.Vector3(), center = new THREE.Vector3();
+        box.getSize(size); box.getCenter(center);
+        logo.position.sub(center);
+        const s = 1.45 / Math.max(size.x, size.y, 0.001);
+        logo.scale.setScalar(s);
+        logo.position.z = 0.245 + (size.z * s) / 2; // stand just off the tile face
+        g.add(logo);
+      }
+      g.position.x = (i - 1.5) * 2.35;
       scene.add(g);
       groups.push(g);
     });
 
     const loaderEl = document.getElementById('vd-loader');
     if (loaderEl) loaderEl.classList.add('vd-3d');
-    const prog = document.getElementById('vdProg');
-    if (prog) prog.style.width = '100%';
 
     function resize() {
       const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -163,5 +122,5 @@ export function start(canvas, finish) {
       requestAnimationFrame(tick);
     }
     tick();
-  }).catch(() => { /* CSS splash stays, failsafe dismisses */ });
+  }, undefined, () => { /* CSS splash stays, failsafe dismisses */ });
 }

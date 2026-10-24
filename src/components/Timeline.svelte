@@ -3,7 +3,9 @@
   import Asterisk from './brand/Asterisk.svelte';
   let { marks = [], utterances = [], now = 0, fmt } = $props();
   const STEPS = [1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000];
-  const span = $derived(Math.max(10000, Math.ceil((now + 500) / 1000) * 1000));
+  // the scale covers every mark and word, so nothing said or drawn falls off the end
+  const latest = $derived(Math.max(now, ...marks.map(m => m.endMs), ...utterances.map(u => u.endMs)));
+  const span = $derived(Math.max(10000, Math.ceil((latest + 500) / 1000) * 1000));
   const step = $derived(STEPS.find(s => span / s <= 6) || STEPS.at(-1));
   const ticks = $derived(Array.from({ length: Math.floor(span / step) + 1 }, (_, i) => i * step));
   const pct = ms => Math.min(100, Math.max(0, ms / span * 100));
@@ -41,12 +43,12 @@
     <span class="name"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></svg>References</span>
     <div class="track refs">{#each refs as r, i (i)}<i class="dot" class:bound={r.strokeId} style="left:{pct(r.atMs)}%" title={r.word || 'nearest in time'}></i>{/each}</div>
   </div>
-  <i class="head" style="left:calc(110px + (100% - 110px) * {pct(now) / 100})"></i>
+  <i class="head" style="left:calc(96px + (100% - 96px) * {pct(now) / 100})"></i>
 </div>
 
 <style>
   .tl { position: relative; display: grid; gap: 4px; }
-  .axis, .lane { display: grid; grid-template-columns: 110px 1fr; align-items: center; }
+  .axis, .lane { display: grid; grid-template-columns: 96px 1fr; align-items: center; }
   .scale { position: relative; height: 18px; font: 11px var(--mono); color: var(--muted); }
   .scale span { position: absolute; transform: translateX(-50%); }
   .scale span:first-child { transform: none; }
@@ -66,6 +68,6 @@
   .star { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: var(--red); border: 1.5px solid var(--red); background: var(--panel); }
   .word { position: absolute; top: 15%; height: 70%; display: flex; align-items: center; justify-content: space-around; gap: 1px; }
   .word b { width: 2px; border-radius: 1px; background: var(--blue); }
-  .bubble { position: absolute; top: 50%; transform: translate(-50%, -50%); max-width: 48%; padding: 3px 10px; border-radius: 999px; background: var(--panel); border: 1px solid var(--blue); color: var(--blue); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bubble { position: absolute; top: 50%; transform: translate(-50%, -50%); max-width: 70%; padding: 3px 10px; border-radius: 999px; background: var(--panel); border: 1px solid var(--blue); color: var(--blue); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .head { position: absolute; top: 18px; bottom: 0; width: 1px; background: var(--ink); opacity: .25; }
 </style>
