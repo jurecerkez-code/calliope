@@ -1,9 +1,11 @@
 """Regression checks for Calliope's drawing handoff and built studio."""
 import json
 import re
+import socket
 import threading
+import time
 import unittest
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -115,6 +117,62 @@ class StudioTest(unittest.TestCase):
         with patch.object(import_site, 'request_page', return_value=(200, {'content-type': 'text/html'}, b'x' * (import_site.MAX_BYTES + 1))):
             code, _ = self.post('/api/import', {'url': 'example.com'})
         self.assertEqual(code, 400)
+
+    def test_import_has_total_deadline_even_when_server_trickles_bytes(self):
+        class SlowPage(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('content-type', 'text/html')
+                self.end_headers()
+                for _ in range(30):
+                    try:
+                        self.wfile.write(b'x')
+                        self.wfile.flush()
+                    except OSError:
+                        break
+                    time.sleep(.02)
+
+            def log_message(self, format, *args):
+                pass
+
+        source = ThreadingHTTPServer(('127.0.0.1', 0), SlowPage)
+        worker = threading.Thread(target=source.serve_forever, daemon=True)
+        worker.start()
+        address = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', source.server_port))
+        try:
+            with patch.object(import_site, 'public_addresses', return_value=[address]):
+                start = time.monotonic()
+                with self.assertRaises((TimeoutError, OSError)):
+                    import_site.request_page('http://example.com/', start + .15)
+                self.assertLess(time.monotonic() - start, .5)
+        finally:
+            source.shutdown()
+            source.server_close()
+            worker.join()
+
+    def test_import_deadline_includes_dns_resolution(self):
+        def slow_dns(*args, **kwargs):
+            time.sleep(.35)
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.215.14', 80))]
+
+        with patch.object(import_site.socket, 'getaddrinfo', side_effect=slow_dns), \
+             patch.object(import_site.socket, 'socket') as connected:
+            start = time.monotonic()
+            with self.assertRaisesRegex(TimeoutError, 'resolver timed out'):
+                import_site.request_page('http://example.com/', start + .1)
+            self.assertLess(time.monotonic() - start, .25)
+        connected.assert_not_called()
+
+    def test_import_sheds_requests_when_slots_are_full(self):
+        for _ in range(4):
+            self.assertTrue(server.IMPORT_SLOTS.acquire(blocking=False))
+        try:
+            code, result = self.post('/api/import', {'url': 'example.com'})
+            self.assertEqual(code, 429)
+            self.assertIn('too many imports', result['error'])
+        finally:
+            for _ in range(4):
+                server.IMPORT_SLOTS.release()
 
 
 if __name__ == '__main__':

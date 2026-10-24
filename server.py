@@ -46,6 +46,7 @@ HTTP_PORT = int(os.environ.get('HTTP_PORT', '8800'))
 AUDIO_PORT = int(os.environ.get('AUDIO_PORT', '8801'))
 STROKES = {}
 STROKES_LOCK = threading.Lock()
+IMPORT_SLOTS = threading.BoundedSemaphore(4)
 
 def valid_stroke(s):
     if not isinstance(s, dict) or not isinstance(s.get('id'), str) or not re.fullmatch(r'[\w-]{1,80}', s['id']):
@@ -235,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": f"bad json: {e}"})
             return
         if self.path == '/api/import':
+            if not IMPORT_SLOTS.acquire(blocking=False):
+                return self._send(429, {'error': 'too many imports in progress'})
             try:
                 if not isinstance(payload, dict):
                     raise ValueError('invalid import request')
@@ -243,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {'error': str(e)})
             except Exception:
                 self._send(502, {'error': 'could not fetch website'})
+            finally:
+                IMPORT_SLOTS.release()
         elif self.path == '/api/strokes':
             if not valid_stroke(payload):
                 return self._send(400, {'error': 'invalid stroke'})
