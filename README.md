@@ -15,7 +15,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/hackathon-Jamie%20Agentic%20AI%20Hack-37ff8b" alt="hackathon">
   <img src="https://img.shields.io/badge/voice-Reson8%20turns-4cc9f0" alt="voice">
-  <img src="https://img.shields.io/badge/brain-Anthropic%20Claude-ffd166" alt="brain">
+  <img src="https://img.shields.io/badge/brain-Lyceum%20DeepSeek%20V4%20Flash-ffd166" alt="brain">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="python">
 </p>
@@ -41,7 +41,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 3. **The agent reasons, then executes in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It writes one short paragraph of reasoning, then returns updated HTML for the preview. Recording mode saves the same voice-and-mark timeline without calling the agent.
 
 <p align="center">
-  <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Claude, preview" width="900">
+  <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Lyceum, preview" width="900">
 </p>
 
 ## Blank canvas mode
@@ -75,31 +75,31 @@ Website URL fields are for importing a page, not typing instructions. Voice and 
 
 - **Chunks are the trick.** Short enough to react during a meeting, long enough to carry context. Each transcript chunk travels with the sketches made in its window. A stroke that crosses a boundary is sent whole, never cut in half.
 - **Words and marks are compared.** When you say "make it bigger" and circle a box, the agent gets both. When your words and your marks disagree, the reasoning step says so out loud.
-- **Nothing goes live from a meeting.** APPLY updates the preview. PUBLISH stages the page and prints the deploy command. A human decides when an idea is ready to leave the room.
+- **Nothing goes live from a meeting.** APPLY updates the preview; the studio has no publish control. A human decides when an idea is ready to leave the room.
 
 ## Sponsor tech, and why
 
 | Part | Technology | Why |
 |---|---|---|
 | Ears | **Reson8** speech to text, turns endpoint (API client: `calliope`) | Server side turn detection with timestamps, fast enough to react mid-meeting. Audio goes 16 kHz mono PCM through a small local relay so the API key never reaches the browser. |
-| Brain | **Anthropic Claude** | One call understands spoken intent plus drawing geometry plus the target elements, reasons about it in words, and writes the new HTML. |
+| Brain | **DeepSeek V4 Flash via Lyceum** | One call understands spoken intent plus drawing geometry plus the target elements, reasons about it in words, and writes the new HTML. |
 
 ## Run it
 
 Requirements: Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), Node.js with npm, and Chrome. The microphone needs a secure browser origin (localhost counts) and a reachable WebSocket audio relay.
 
 ```bash
-cp .env.example .env   # fill in RESON8_API_KEY and ANTHROPIC_API_KEY
+cp .env.example .env   # fill in RESON8_API_KEY and LYCEUM_API_KEY
 npm ci
 npm run build
 uv run server.py
 ```
 
-Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL or **START BLANK CANVAS**; no demo page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live sends committed turns automatically; **APPLY** sends marks without speech. Without an Anthropic key, drawing works but APPLY reports that the agent is unavailable. Live marks are sent to the backend; failed deliveries can be retried, and APPLY refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
+Then open **http://127.0.0.1:8800** in Chrome. Choose **IMPORT WEBSITE** with a public URL or **START BLANK CANVAS**; no demo page loads automatically. On a website, choose Recording or Live, press **MIC ON**, and talk while drawing. Live sends committed turns automatically; **APPLY** sends marks without speech. Without a Lyceum key, drawing works but APPLY reports that the agent is unavailable. Live marks are sent to the backend; failed deliveries can be retried, and APPLY refuses unaccepted marks. `npm test` and `uv run --with websockets python -m unittest test_studio.py` run the local checks.
 
-To use a website as the studio canvas, paste its public URL on the opening screen and press **IMPORT WEBSITE**. You can import another URL later in website mode. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import keeps you on the opening screen or leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, APPLY, and staged PUBLISH remain the studio's existing controls.
+To use a website as the studio canvas, paste its public URL on the opening screen and press **IMPORT WEBSITE**. You can import another URL later in website mode. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import keeps you on the opening screen or leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, and APPLY remain the studio's controls.
 
-To use another website as the studio canvas, paste its public URL in **Website URL** and press **IMPORT URL**. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, APPLY, and staged PUBLISH remain the studio's existing controls.
+To use another website as the studio canvas, paste its public URL in **Website URL** and press **IMPORT URL**. The server fetches its HTML, strips scripts, and opens it in the existing sandboxed preview; a failed import leaves the current preview alone. This supports server-rendered public pages up to 200 KB of HTML. Client-rendered apps need scripts and will not render, and imported pages may load styles, images, and fonts from their original HTTPS hosts. Voice, drawing, and APPLY remain the studio's controls.
 
 > Open the app through the server URL. Opening `index.html` directly does not work: without the server there is no mic relay and no agent.
 
@@ -116,7 +116,7 @@ To use another website as the studio canvas, paste its public URL in **Website U
 
 ## Status
 
-**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, Claude reasoning plus preview execution when keyed, and staged publish. The retired Chrome extension and classic page are no longer part of the app.
+**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, and a Lyceum DeepSeek APPLY endpoint. Typed instructions changed the preview in the isolated test deployment; the current Live voice-to-APPLY flow has not been verified end to end. The retired Chrome extension and classic page are no longer part of the app.
 
 **Not yet built:** identifying the individual printed word inside an element such as `h1` when circled. Current targeting reports the DOM element; word-range geometry needs its own implementation and browser checks. Shape fixtures are synthetic, so test real hand-drawn traces before treating a tentative label as reliable.
 
