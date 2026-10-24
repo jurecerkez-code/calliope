@@ -376,7 +376,7 @@
         <div class="notice">COPY FOR AGENT = MERMAID DIAGRAM + TIMED WORDS + JSON. PASTE INTO ANY AGENT WITH THE PNG.</div>
       {:else if operation==='live'}
         {#if manualAction}<Button id="btnApply" variant="amber" disabled={busy} onclick={() => apply(true)}>{manualAction==='retry'?'RETRY AGENT':manualAction==='speech-only'?'SEND SPEECH ONLY':'SEND SKETCHES'} ▸</Button>{/if}
-        <div class="notice">LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY. SKETCHES WITHOUT SPEECH CAN BE SENT SEPARATELY. {#if !publishEnabled}REVIEW ONLY — AGENT REQUESTS SHOW THE PREPARED MESSAGE, NOT A LIVE EDIT.{/if}</div>
+        <div class="notice">LIVE: EACH COMPLETED SPOKEN TURN CHANGES THE PREVIEW AUTOMATICALLY. SKETCHES WITHOUT SPEECH CAN BE SENT SEPARATELY. {#if !publishEnabled}REVIEW ONLY — CHANGES STAY IN THIS PREVIEW; PUBLISHING IS DISABLED.{/if}</div>
       {:else}
         <Button id="btnCopy" variant="amber" onclick={copyArtifact}>COPY ARTIFACT</Button>
         <div class="notice">RECORDING: VOICE AND MARKS ARE KEPT ON ONE CLOCK AS MARKDOWN + JSON. NOTHING IS SENT TO THE AGENT.</div>

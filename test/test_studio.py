@@ -5,6 +5,7 @@ import os
 import re
 import socket
 import tempfile
+import subprocess
 import threading
 import time
 import unittest
@@ -18,16 +19,23 @@ import server
 import import_site
 
 
-def lyceum_reply(reasoning='ok', html='<html></html>'):
-    return json.dumps({'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
-        'reasoning': reasoning, 'html': html
-    })}}]}).encode()
+def tool_reply(old='<h1>Old</h1>', new='<h1>Updated</h1>', *, path='index.html',
+               name='edit', call_id='edit-1'):
+    return json.dumps({'choices': [{'finish_reason': 'tool_calls', 'message': {
+        'role': 'assistant', 'content': 'Updating the heading.', 'tool_calls': [{
+            'id': call_id, 'type': 'function', 'function': {'name': name,
+            'arguments': json.dumps({'path': path, 'edits': [{'oldText': old, 'newText': new}]})}
+        }]}}]}).encode()
+
+
+def stop_reply(content='Updated the heading.'):
+    return json.dumps({'choices': [{'finish_reason': 'stop', 'message': {
+        'role': 'assistant', 'content': content}}]}).encode()
 
 
 class StudioTest(unittest.TestCase):
     def setUp(self):
-        # Existing Lyceum cases must stay deterministic if the host has a Claude key.
-        anthropic_key = patch.object(server, 'ANTHROPIC_KEY', '')
+        anthropic_key = patch.object(server, 'ANTHROPIC_KEY', '', create=True)
         anthropic_key.start()
         self.addCleanup(anthropic_key.stop)
         with server.STROKES_LOCK:
@@ -44,13 +52,15 @@ class StudioTest(unittest.TestCase):
         self.thread.join()
 
     def post(self, path, data, headers=None):
-        req = Request(self.url + path, json.dumps(data).encode(),
-                      {'content-type': 'application/json', **(headers or {})})
+        connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
         try:
-            with urlopen(req) as response:
-                return response.status, json.load(response)
-        except HTTPError as error:
-            return error.code, json.load(error)
+            connection.request('POST', path, json.dumps(data, ensure_ascii=False).encode('utf-8'),
+                               {'content-type': 'application/json',
+                                **{k.lower(): v for k, v in (headers or {}).items()}})
+            response = connection.getresponse()
+            return response.status, json.load(response)
+        finally:
+            connection.close()
 
     def stroke(self):
         coords = [(20, 30), (30, 20), (40, 30), (30, 40), (20, 30)]
@@ -407,241 +417,243 @@ class StudioTest(unittest.TestCase):
         self.assertIn('touched h1', message)
         self.assertIn('preview-document-css-pixels', message)
         self.assertIn('949×2862', message)
-        with patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
-            server.lyceum_apply([{'transcript': 'change this', 'strokes': [mark]}], '<html></html>')
-            prompt = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
+        prompt = server.build_agent_prompt([{'transcript': 'change this', 'strokes': [mark]}], '<html></html>')
         self.assertIn(message, prompt)
         self.assertNotIn('SKETCH on:', prompt)
 
-    def test_lyceum_apply_uses_chat_completions_and_returns_html(self):
-        raw = []
+    def test_apply_pi_edits_virtual_document_without_model_page_echo(self):
+        original = ('<!DOCTYPE html><html><head><title>Preview</title></head>'
+                    '<body><h1>Old</h1><p>Keep this paragraph.</p></body></html>')
+        edited = original.replace('<h1>Old</h1>', '<h1>Updated</h1>')
+        replies = [
+            {'choices': [{'finish_reason': 'tool_calls', 'message': {
+                'role': 'assistant', 'content': 'Updating the heading.', 'tool_calls': [{
+                    'id': 'edit-1', 'type': 'function', 'function': {'name': 'edit',
+                    'arguments': json.dumps({'path': 'index.html',
+                        'edits': [{'oldText': '<h1>Old</h1>', 'newText': '<h1>Updated</h1>'}]})}}]}}]},
+            {'choices': [{'finish_reason': 'stop', 'message': {
+                'role': 'assistant', 'content': 'Updated the heading.'}}]},
+        ]
         with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
              patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply('Follow the sketch', '<!DOCTYPE html><html><h1>Updated</h1></html>')
-            result = server.lyceum_apply([], '<html>old</html>', prompt='change it', on_response=raw.append)
-        opener.assert_called_once_with(server.NoRedirect)
-        sent = opener.return_value.open.call_args.args[0]
-        body = json.loads(sent.data)
-        self.assertEqual(sent.full_url, 'https://api.lyceum.technology/openai/v1/chat/completions')
-        self.assertEqual(sent.get_header('Authorization'), 'Bearer test-only')
-        self.assertEqual(body['model'], 'deepseek/deepseek-v4-flash-0731')
-        self.assertEqual(body['reasoning_effort'], 'none')
-        self.assertEqual(body['messages'], [{'role': 'user', 'content': 'change it'}])
-        self.assertEqual(result, {'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'})
-        self.assertEqual(raw[0]['choices'][0]['message']['content'], json.dumps({
-            'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'}))
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                json.dumps(reply).encode() for reply in replies]
+            code, result = self.post('/api/apply', {
+                'bundles': [{'transcript': 'Change the heading to Updated', 'strokes': []}],
+                'current_html': original,
+            })
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result['html'], edited)
+        calls = opener.return_value.open.call_args_list
+        self.assertEqual(len(calls), 2)
+        body = json.loads(calls[0].args[0].data)
+        self.assertEqual([tool['function']['name'] for tool in body['tools']], ['edit'])
+        self.assertNotIn(original, body['messages'][0]['content'])
+        self.assertEqual(body['messages'][0]['role'], 'system')
+        self.assertIn(original, body['messages'][1]['content'])
+        self.assertNotIn('return the COMPLETE updated HTML', body['messages'][1]['content'])
+        self.assertEqual(body['model'], server.MODEL)
+        self.assertLessEqual(body['max_tokens'], 4096)
 
-    def test_apply_selects_claude_before_lyceum_and_accepts_either_key(self):
-        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
-                   'current_html': '<html><h1>Old</h1></html>'}
-        reply = json.dumps({'stop_reason': 'end_turn', 'content': [
-            {'type': 'text', 'text': json.dumps({'html': '<html><h1>New</h1></html>'})}
-        ]}).encode()
-        # Initialize urllib's process-wide opener before mocking its factory.
-        with urlopen(self.url + '/api/config') as response:
-            self.assertEqual(response.status, 200)
-        for lyceum_key in ('', 'lyceum-test'):
-            with self.subTest(lyceum_key=bool(lyceum_key)), \
-                 patch.object(server, 'ANTHROPIC_KEY', 'anthropic-test', create=True), \
-                 patch.object(server, 'LYCEUM_KEY', lyceum_key), \
+    def test_pi_errors_discard_all_edits_and_keep_accepted_marks(self):
+        stroke = self.stroke()
+        self.assertEqual(self.post('/api/strokes', stroke)[0], 201)
+        original = '<html><body><h1>Old</h1><p>Same</p><p>Same</p></body></html>'
+        payload = {'bundles': [{'transcript': 'Change heading', 'strokes': [stroke]}],
+                   'current_html': original}
+        failures = {
+            'missing span': [tool_reply('absent')],
+            'ambiguous span': [tool_reply('<p>Same</p>')],
+            'fuzzy span': [tool_reply('<h1>Old</h1> ')],
+            'wrong path': [tool_reply(path='../server.py')],
+            'wrong tool': [tool_reply(name='bash')],
+            'no edit': [stop_reply()],
+            'empty answer': [stop_reply('')],
+            'page echo': [stop_reply(json.dumps({'html': original}))],
+            'no-op': [tool_reply(new='<h1>Old</h1>'), stop_reply()],
+            'incomplete document': [tool_reply('</html>', '')],
+            'fake html in comment': [tool_reply(original, '<!-- <html></html> -->')],
+            'late missing span': [tool_reply(), tool_reply('absent', call_id='edit-2')],
+            'late provider failure': [tool_reply(), b'{PRIVATE RESPONSE'],
+            'round limit': [tool_reply(), tool_reply('Updated', 'Next', call_id='edit-2'),
+                            tool_reply('Next', 'Last', call_id='edit-3')],
+            'repeated id': [tool_reply(), tool_reply('Updated', 'Next')],
+            'malformed provider JSON': [b'{PRIVATE RESPONSE'],
+            'oversized provider response': [b'x' * (server.MAX_PROVIDER_BYTES + 1)],
+            'oversized explanation': [stop_reply('x' * 1001)],
+            'truncated tools': [tool_reply().replace(b'"finish_reason": "tool_calls"', b'"finish_reason": "length"')],
+            'invalid arguments': [tool_reply().replace(b'"arguments": "', b'"arguments": "INVALID')],
+            'invalid message': [b'{"choices":[{"finish_reason":"stop","message":null}]}'],
+            'invalid choices': [b'{"choices":[]}'],
+            'auth failure': [HTTPError('https://provider.invalid', 401, 'PRIVATE KEY', {}, None)],
+            'timeout': [TimeoutError('PRIVATE RESPONSE')],
+        }
+        for name, replies in failures.items():
+            with self.subTest(name=name), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
                  patch.object(server.urllib.request, 'build_opener') as opener:
-                opener.return_value.open.return_value.__enter__.return_value.read.return_value = reply
+                opener.return_value.open.return_value.__enter__.return_value.read.side_effect = replies
                 code, result = self.post('/api/apply', payload)
-                self.assertEqual(code, 200)
-                self.assertEqual(result['html'], '<html><h1>New</h1></html>')
-                request = opener.return_value.open.call_args.args[0]
-                body = json.loads(request.data)
-                self.assertEqual(request.full_url, 'https://api.anthropic.com/v1/messages')
-                self.assertEqual(request.get_header('X-api-key'), 'anthropic-test')
-                self.assertEqual(request.get_header('Anthropic-version'), '2023-06-01')
-                self.assertEqual(body['model'], 'claude-haiku-5-5')
-                self.assertEqual(body['thinking'], {'type': 'disabled'})
-                self.assertEqual(body['messages'][0]['content'], result['agent_message'])
+            self.assertEqual(code, 502, (name, result))
+            self.assertNotIn('html', result)
+            self.assertNotIn('PRIVATE', result['error'])
+            self.assertLessEqual(opener.return_value.open.call_count, 3)
+            self.assertEqual(payload['current_html'], original)
+            self.assertEqual(server.STROKES[stroke['id']], stroke)
+            self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], original, []))
+        # Retrying starts from the caller's unchanged page, even after a partial edit.
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [tool_reply(), stop_reply()]
+            code, result = self.post('/api/apply', payload)
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result['html'], original.replace('<h1>Old</h1>', '<h1>Updated</h1>'))
 
-        with patch.object(server, 'ANTHROPIC_KEY', '', create=True), \
-             patch.object(server, 'LYCEUM_KEY', 'lyceum-test'), \
+    def test_pi_three_responses_allow_two_edits_and_short_explanation(self):
+        original = '<html><body><h1>Old</h1><p>Keep</p></body></html>'
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), tool_reply('Updated', 'Final', call_id='edit-2'), stop_reply('Done.')]
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result['html'], original.replace('Old', 'Final'))
+        self.assertEqual(result['reasoning'], 'Done.')
+        calls = opener.return_value.open.call_args_list
+        self.assertEqual(len(calls), 3)
+        body = json.loads(calls[-1].args[0].data)
+        self.assertEqual([m['role'] for m in body['messages']],
+                         ['system', 'user', 'assistant', 'tool', 'assistant', 'tool'])
+        for call in calls:
+            self.assertEqual(call.args[0].full_url, 'https://api.lyceum.technology/openai/v1/chat/completions')
+            self.assertEqual(call.args[0].get_header('Authorization'), 'Bearer test-only')
+            self.assertEqual(call.kwargs['timeout'], 30)
+            self.assertEqual(json.loads(call.args[0].data)['reasoning_effort'], 'none')
+        self.assertEqual(opener.call_args.args, (server.NoRedirect,))
+        self.assertNotIn('html', body['messages'][-1])
+        self.assertLess(len(body['messages'][-1]['content']), 100)
+
+    def test_pi_completed_edit_does_not_require_explanation(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        responses = []
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply(), stop_reply('')]
+            result = server.lyceum_apply([], original, on_response=responses.append)
+        self.assertEqual(result['html'], original.replace('Old', 'Updated'))
+        self.assertEqual(result['reasoning'], '')
+        self.assertEqual(len(responses), 2)
+
+    def test_claude_uses_pi_tool_when_selected(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        edit = {'type': 'tool_use', 'id': 'edit-1', 'name': 'edit', 'input': {
+            'path': 'index.html', 'edits': [{'oldText': '<h1>Old</h1>',
+                                            'newText': '<h1>Updated</h1>'}]}}
+        replies = [{'stop_reason': 'tool_use', 'content': [edit]},
+                   {'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'Done.'}]}]
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-claude', create=True), \
+             patch.object(server, 'LYCEUM_KEY', 'test-lyceum'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                json.dumps(reply).encode() for reply in replies]
+            code, result = self.post('/api/apply', {'bundles': [], 'current_html': original})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result['html'], original.replace('Old', 'Updated'))
+        self.assertEqual(result['reasoning'], 'Done.')
+        calls = opener.return_value.open.call_args_list
+        self.assertEqual(len(calls), 2)
+        request = calls[0].args[0]
+        body = json.loads(request.data)
+        self.assertEqual(request.full_url, 'https://api.anthropic.com/v1/messages')
+        self.assertEqual(request.get_header('X-api-key'), 'test-claude')
+        self.assertEqual(body['model'], server.CLAUDE_MODEL)
+        self.assertEqual(body['system'], server.EDIT_SYSTEM)
+        self.assertEqual(body['tools'][0]['name'], 'edit')
+        self.assertIn('input_schema', body['tools'][0])
+        self.assertIn(original, body['messages'][0]['content'])
+        followup = json.loads(calls[1].args[0].data)
+        self.assertEqual(followup['messages'][1]['content'], [edit])
+        self.assertEqual(followup['messages'][2]['content'][0]['type'], 'tool_result')
+        self.assertNotIn(original, followup['messages'][2]['content'][0]['content'])
+
+    def test_claude_failed_or_incomplete_tool_turn_discards_html(self):
+        original = '<html><body><h1>Old</h1></body></html>'
+        edit = {'type': 'tool_use', 'id': 'edit-1', 'name': 'edit', 'input': {
+            'path': 'index.html', 'edits': [{'oldText': '<h1>Old</h1>',
+                                            'newText': '<h1>Updated</h1>'}]}}
+        cases = (
+            [{'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': '{"html":"private"}'}]}],
+            [{'stop_reason': 'max_tokens', 'content': [edit]}],
+            [{'stop_reason': 'tool_use', 'content': [dict(edit, name='bash')]}],
+            [{'stop_reason': 'tool_use', 'content': [edit]},
+             {'stop_reason': 'max_tokens', 'content': [{'type': 'text', 'text': 'private'}]}],
+            [{'stop_reason': 'tool_use', 'content': [edit]},
+             {'stop_reason': 'end_turn', 'content': [{'type': 'unexpected', 'text': 'private'}]}],
+        )
+        for replies in cases:
+            with self.subTest(replies=replies), \
+                 patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
+                 patch.object(server, 'LYCEUM_KEY', 'test-lyceum'), \
+                 patch.object(server.urllib.request, 'build_opener') as opener:
+                opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                    json.dumps(reply).encode() for reply in replies]
+                code, result = self.post('/api/apply', {
+                    'bundles': [], 'current_html': original})
+                self.assertEqual(code, 502, result)
+                self.assertNotIn('html', result)
+                self.assertNotIn('private', result['error'])
+                self.assertLessEqual(opener.return_value.open.call_count, 2)
+
+    def test_provider_selection_accepts_claude_only_or_lyceum_only(self):
+        payload = {'bundles': [], 'current_html': '<html><h1>Old</h1></html>'}
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-claude'), \
+             patch.object(server, 'LYCEUM_KEY', ''), \
+             patch.object(server, 'claude_apply', return_value={'html': '<html>Claude</html>'}) as agent:
+            code, result = self.post('/api/apply', payload)
+            self.assertEqual(code, 200, result)
+            agent.assert_called_once()
+        with patch.object(server, 'ANTHROPIC_KEY', ''), \
+             patch.object(server, 'LYCEUM_KEY', 'test-lyceum'), \
              patch.object(server, 'lyceum_apply', return_value={'html': '<html>Lyceum</html>'}) as agent:
             code, result = self.post('/api/apply', payload)
-            self.assertEqual(code, 200)
-            self.assertEqual(result['html'], '<html>Lyceum</html>')
-            agent.assert_called_once()
-        with patch.object(server, 'ANTHROPIC_KEY', '', create=True), \
-             patch.object(server, 'LYCEUM_KEY', ''):
-            code, result = self.post('/api/apply', payload)
-            self.assertEqual(code, 503)
-            self.assertIn('agent_message', result)
-
-    def test_claude_incomplete_answer_does_not_claim_success_or_expose_output(self):
-        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
-                   'current_html': '<html><h1>Old</h1></html>'}
-        with urlopen(self.url + '/api/config') as response:
-            self.assertEqual(response.status, 200)
-        for stop_reason, content, failure in (
-            ('max_tokens', '{"html":"PRIVATE OUTPUT', 'output limit'),
-            ('end_turn', '{"html":"PRIVATE OUTPUT', 'malformed JSON'),
-            ('end_turn', json.dumps({'html': '<html>PRIVATE OUTPUT'}), 'incomplete HTML'),
-        ):
-            with self.subTest(failure=failure), patch.object(server, 'ANTHROPIC_KEY', 'anthropic-test', create=True), \
-                 patch.object(server, 'LYCEUM_KEY', 'lyceum-test'), \
-                 patch.object(server, 'lyceum_apply') as lyceum, \
-                 patch.object(server.urllib.request, 'build_opener') as opener:
-                opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps({
-                    'stop_reason': stop_reason, 'content': [{'type': 'text', 'text': content}]
-                }).encode()
-                code, result = self.post('/api/apply', payload)
-                self.assertEqual(code, 502)
-                self.assertIn(failure, result['error'])
-                self.assertNotIn('PRIVATE', result['error'])
-                self.assertNotIn('html', result)
-                lyceum.assert_not_called()
-                self.assertEqual(result['agent_message'], server.build_agent_prompt(
-                    payload['bundles'], payload['current_html'], []))
-
-    def test_claude_response_is_recorded_in_private_trace(self):
-        session = 'c' * 32
-        reply = {'stop_reason': 'end_turn', 'content': [
-            {'type': 'text', 'text': json.dumps({'html': '<html>Updated</html>'})}]}
-        with urlopen(self.url + '/api/config') as response:
-            self.assertEqual(response.status, 200)
-        with tempfile.TemporaryDirectory() as root, \
-             patch.object(server, 'TRACE_DIR', Path(root) / 'traces'), \
-             patch.object(server, 'ANTHROPIC_KEY', 'anthropic-test'), \
-             patch.object(server, 'LYCEUM_KEY', 'lyceum-test'), \
-             patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
-            code, result = self.post('/api/apply', {
-                'session_id': session, 'request_id': 'd' * 32,
-                'bundles': [{'transcript': 'Update', 'strokes': []}],
-                'current_html': '<html>Old</html>'})
             self.assertEqual(code, 200, result)
-            trace = Path(root) / 'traces' / (session + '.jsonl')
-            events = [json.loads(line) for line in trace.read_text().splitlines()]
-        self.assertEqual([event['event'] for event in events],
-                         ['apply_requested', 'provider_response', 'apply_result'])
-        self.assertEqual(events[1]['data']['response'], reply)
-        self.assertEqual(events[2]['data']['status'], 'succeeded')
+            agent.assert_called_once()
+        with patch.object(server, 'ANTHROPIC_KEY', ''), patch.object(server, 'LYCEUM_KEY', ''):
+            code, result = self.post('/api/apply', payload)
+            self.assertEqual(code, 503, result)
 
-    def test_agent_can_return_updated_html_without_reasoning(self):
-        prompt = server.build_agent_prompt(
-            [{'transcript': 'Make the heading green', 'strokes': []}],
-            '<html><h1>Old</h1></html>')
-        self.assertNotIn('REASON FIRST', prompt)
-        self.assertNotIn('"reasoning"', prompt)
-        self.assertIn('"html"', prompt)
-        answer = {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
-            'html': '<html><h1>Green</h1></html>'})}}]}
-        # Initialize urllib's process-wide opener before mocking its factory.
-        with urlopen(self.url + '/api/config') as response:
-            self.assertEqual(response.status, 200)
-        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
-             patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(answer).encode()
-            result = server.lyceum_apply(
-                [{'transcript': 'Make the heading green', 'strokes': []}],
-                '<html><h1>Old</h1></html>', prompt=prompt)
-            sent = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
-        self.assertEqual(result['html'], '<html><h1>Green</h1></html>')
-        self.assertEqual(result['reasoning'], '')
-        self.assertEqual(sent, prompt)
-
-    def test_empty_model_content_does_not_report_successful_apply(self):
-        reply = {'choices': [{'finish_reason': 'stop', 'message': {
-            'content': '', 'reasoning_content': 'I worked on the page but gave no final answer'
-        }}]}
-        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
-             patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
-            code, result = self.post('/api/apply', {
-                'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
-                'current_html': '<html><h1>Old</h1></html>'
-            })
-        self.assertNotEqual(code, 200)
-        self.assertIn('error', result)
-
-    def test_truncated_or_non_html_model_answer_does_not_consume_turn(self):
-        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
-                   'current_html': '<html><h1>Old</h1></html>'}
-        answers = [
-            {'finish_reason': 'length', 'message': {'content': json.dumps({
-                'reasoning': 'started', 'html': '<html><h1>Partial</h1></html>'})}},
-            {'finish_reason': 'stop', 'message': {'content': json.dumps({
-                'reasoning': 'started', 'html': '<html><h1>Partial'})}},
-            {'finish_reason': 'stop', 'message': {'content': json.dumps({
-                'reasoning': 'started', 'html': 'not HTML'})}},
-        ]
-        for answer in answers:
-            with self.subTest(answer=answer['message']['content']), \
-                 patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+    def test_invalid_or_oversized_documents_never_reach_provider(self):
+        for html in (None, '<h1>fragment</h1>', '<html/>', '<!-- <html></html> -->',
+                     '<html><script>let s="</html>"', '<html></html><html></html>',
+                     '<html>' + 'é' * 100_000 + '</html>'):
+            with self.subTest(html=str(html)[:40]), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
                  patch.object(server.urllib.request, 'build_opener') as opener:
-                opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps({'choices': [answer]}).encode()
-                code, result = self.post('/api/apply', payload)
-                self.assertNotEqual(code, 200)
-                self.assertIn('error', result)
-
-    def test_incomplete_lyceum_answer_identifies_failure_without_leaking_output(self):
-        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
-                   'current_html': '<html><h1>Old</h1></html>'}
-        cases = [
-            ('length', 'PRIVATE MODEL OUTPUT', 'output limit', False),
-            ('stop', '', 'empty answer', True),
-            ('stop', '{"html": "PRIVATE MODEL OUTPUT', 'malformed JSON', False),
-            ('stop', json.dumps({'html': '<html>PRIVATE MODEL OUTPUT'}), 'incomplete HTML', False),
-            ('stop', ['PRIVATE MODEL OUTPUT'], 'invalid content', False),
-        ]
-        for finish, content, reason, has_reasoning in cases:
-            with self.subTest(reason=reason), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
-                 patch.object(server.urllib.request, 'build_opener') as opener:
-                reply = {'choices': [{'finish_reason': finish, 'message': {
-                    'content': content, 'reasoning_content': 'PRIVATE REASONING' if has_reasoning else ''}}]}
-                opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
-                connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
-                try:
-                    connection.request('POST', '/api/apply', json.dumps(payload),
-                                       {'Content-Type': 'application/json'})
-                    response = connection.getresponse()
-                    code, result = response.status, json.load(response)
-                finally:
-                    connection.close()
+                code, result = self.post('/api/apply', {'bundles': [], 'current_html': html})
             self.assertEqual(code, 502)
-            self.assertIn(reason, result['error'])
-            self.assertNotIn('PRIVATE', result['error'])
-            self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], payload['current_html'], []))
             self.assertNotIn('html', result)
+            opener.assert_not_called()
 
-        with self.subTest(reason='invalid message'), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
-             patch.object(server.urllib.request, 'build_opener') as opener:
-            reply = {'choices': [{'finish_reason': 'stop', 'message': None}]}
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
-            connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
-            try:
-                connection.request('POST', '/api/apply', json.dumps(payload),
-                                   {'Content-Type': 'application/json'})
-                response = connection.getresponse()
-                code, result = response.status, json.load(response)
-            finally:
-                connection.close()
-            self.assertEqual(code, 502)
-            self.assertIn('invalid message', result['error'])
-            self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], payload['current_html'], []))
-            self.assertNotIn('html', result)
-
-        with self.subTest(reason='malformed provider body'), patch.object(server, 'LYCEUM_KEY', 'test-only'), \
-             patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'{PRIVATE PROVIDER BODY'
-            connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
-            try:
-                connection.request('POST', '/api/apply', json.dumps(payload),
-                                   {'Content-Type': 'application/json'})
-                response = connection.getresponse()
-                code, result = response.status, json.load(response)
-            finally:
-                connection.close()
-            self.assertEqual(code, 502)
-            self.assertIn('malformed provider response', result['error'])
-            self.assertNotIn('PRIVATE', result['error'])
-            self.assertEqual(result['agent_message'], server.build_agent_prompt(payload['bundles'], payload['current_html'], []))
-            self.assertNotIn('html', result)
+    def test_pi_subprocess_is_fixed_has_no_credentials_and_fails_closed(self):
+        with patch.object(server.subprocess, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout='{"html":"<html></html>"}', stderr='')
+            server.pi_adapter({'action': 'edit', 'current_html': '<html></html>', 'calls': []})
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], ['node', str(server.PI_ADAPTER.resolve())])
+        self.assertEqual(set(kwargs['env']), {'PATH'})
+        self.assertEqual(kwargs['timeout'], 15)
+        self.assertNotIn('shell', kwargs)
+        self.assertEqual(json.loads(kwargs['input'])['current_html'], '<html></html>')
+        for outcome in (subprocess.TimeoutExpired('node', 15), FileNotFoundError(),
+                        subprocess.CompletedProcess([], 1, stdout='PRIVATE', stderr='PRIVATE'),
+                        subprocess.CompletedProcess([], 0, stdout='invalid', stderr='')):
+            with self.subTest(outcome=str(outcome)), patch.object(server.subprocess, 'run') as run:
+                if isinstance(outcome, Exception):
+                    run.side_effect = outcome
+                else:
+                    run.return_value = outcome
+                with self.assertRaises(server.ProviderAnswerError) as error:
+                    server.pi_adapter({'action': 'edit'})
+                self.assertNotIn('PRIVATE', str(error.exception))
 
     def test_provider_bearer_token_does_not_follow_redirect(self):
         visited = []
@@ -677,6 +689,7 @@ class StudioTest(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 server.urllib.request.build_opener(server.NoRedirect).open(req, timeout=2)
             self.assertEqual(error.exception.code, 302)
+            error.exception.close()
             self.assertEqual(visited, [])
         finally:
             source.shutdown()
@@ -692,11 +705,8 @@ class StudioTest(unittest.TestCase):
         mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
                 't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
                 'strokes': [stroke]}
-        with patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
-            server.lyceum_apply([{'transcript':'make this green','strokes':[mark],
-                                  'references':[{'word':'this','atMs':2750,'strokeId':'during'}]}],'<html></html>')
-        prompt = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
+        prompt = server.build_agent_prompt([{'transcript':'make this green','strokes':[mark],
+            'references':[{'word':'this','atMs':2750,'strokeId':'during'}]}], '<html></html>')
         self.assertIn('SKETCH during:',prompt)
         self.assertIn('REFERENCE "this" -> during',prompt)
 
@@ -728,10 +738,7 @@ class StudioTest(unittest.TestCase):
             code, _ = self.post('/api/apply', {'bundles': [bundle], 'current_html': '<html></html>'})
             self.assertEqual(code, 200)
             agent.assert_called_once()
-        with patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
-            server.lyceum_apply([bundle], '<html></html>')
-            prompt = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
+        prompt = server.build_agent_prompt([bundle], '<html></html>')
         self.assertIn('X', prompt)
         self.assertIn(message, prompt)
         self.assertIn('2 ordered original paths', message)
@@ -801,9 +808,10 @@ class StudioTest(unittest.TestCase):
         self.assertIn(receipt['agent_message'], unavailable['agent_message'])
         self.assertIn(payload['current_html'], unavailable['agent_message'])
         with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
+            opener.return_value.open.return_value.__enter__.return_value.read.side_effect = [
+                tool_reply('Draw together', 'Updated'), stop_reply()]
             code, result = self.post('/api/apply', payload)
-            sent = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
+            sent = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][1]['content']
         self.assertEqual(code, 200)
         self.assertEqual(result['agent_message'], sent)
         self.assertIn(receipt['agent_message'], sent)
