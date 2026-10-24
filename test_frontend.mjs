@@ -38,6 +38,18 @@ test('a mark drawn during speech follows that utterance, including in the word l
   assert.deepEqual(lanes(timeline).words.map(w => w.text),['make','this','green']);
 });
 
+test('the visible link ends at its actual mark, not below the pointing word', () => {
+  const mark = makePayload({id:'during',tool:'pen',t:2600,pts,elements:['button#download']},2900,{width:949,height:2862},'');
+  const data = lanes([
+    {kind:'transcript',t:2100,t_end:3600,text:'make this green',words:[{text:'this',startMs:3200,endMs:3300}]},
+    {kind:'stroke',t:2600,t_end:2900,payload:mark}
+  ]);
+  assert.equal(data.links[0].markAtMs, 2750);
+  assert.notEqual(data.links[0].markAtMs, data.links[0].atMs);
+  const component = readFileSync(new URL('./src/Lanes.svelte', import.meta.url), 'utf8');
+  assert.match(component, /x2="\{g\.x\(l\.markAtMs\)\}"/);
+});
+
 test('the closer pointing turn owns a mark, without a dangling earlier reference', () => {
   const mark = makePayload({id:'shared',tool:'pen',t:1700,pts,elements:['button#download']},1800,{width:949,height:2862},'');
   const bundles = buildBundles([

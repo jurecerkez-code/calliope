@@ -36,6 +36,8 @@
   {#each data.links as l, i (i + '-' + l.atMs)}
     {#if !l.unbound}
       <line x1="{g.x(l.atMs)}" y1="{Y.links}" x2="{g.x(l.atMs)}" y2="{Y.words + 7}" class="ref-link" />
+      <line x1="{g.x(l.atMs)}" y1="{Y.links}" x2="{g.x(l.markAtMs)}" y2="{Y.links}" class="ref-link" />
+      <line x1="{g.x(l.markAtMs)}" y1="{Y.links}" x2="{g.x(l.markAtMs)}" y2="{Y.marks + 7}" class="ref-link" />
     {/if}
     <circle cx="{g.x(l.atMs)}" cy="{Y.links}" r="3" class="ref" class:none={l.unbound} />
   {/each}

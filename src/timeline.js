@@ -113,6 +113,8 @@ const DEICTIC = /^(this|that|these|those|here|there)$/;
 // Three lanes for the on-page timeline: MARKS, WORDS, LINKS (word -> mark).
 export function lanes(timeline) {
   const marks = [], words = [], links = [];
+  const markById = new Map(timeline.filter(e => e.kind === 'stroke' && e.payload)
+    .map(e => [e.payload.id, {startMs:e.t, endMs:e.t_end ?? e.t}]));
   for (const e of timeline) {
     if (e.kind === 'stroke' && e.payload) {
       marks.push({label: e.payload.id.slice(0,2).toUpperCase(), startMs: e.t, endMs: e.t_end ?? e.t});
@@ -124,7 +126,9 @@ export function lanes(timeline) {
       words.push({text, startMs: typeof w === 'string' ? b.t_start : (w.startMs ?? b.t_start), deictic: DEICTIC.test((text || '').toLowerCase().replace(/[^a-z']/g,''))});
     }
     for (const r of (b.references || [])) {
-      links.push({atMs: r.atMs, word: r.word, markId: (r.strokeId || '').slice(0,2).toUpperCase(), unbound: !r.strokeId});
+      const mark = markById.get(r.strokeId);
+      links.push({atMs: r.atMs, word: r.word, markId: (r.strokeId || '').slice(0,2).toUpperCase(),
+        markAtMs: mark ? (mark.startMs + mark.endMs) / 2 : null, unbound: !mark});
     }
   }
   return {marks, words, links};

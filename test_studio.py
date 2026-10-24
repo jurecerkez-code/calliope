@@ -23,8 +23,9 @@ class StudioTest(unittest.TestCase):
         self.http.server_close()
         self.thread.join()
 
-    def post(self, path, data):
-        req = Request(self.url + path, json.dumps(data).encode(), {'content-type': 'application/json'})
+    def post(self, path, data, headers=None):
+        req = Request(self.url + path, json.dumps(data).encode(),
+                      {'content-type': 'application/json', **(headers or {})})
         try:
             with urlopen(req) as response:
                 return response.status, json.load(response)
@@ -58,6 +59,48 @@ class StudioTest(unittest.TestCase):
         code, readback = self.post('/api/strokes/readback', {'id': stroke['id']})
         self.assertEqual(code, 200)
         self.assertEqual(readback['stroke'], stroke)
+
+    def test_cross_origin_post_cannot_invoke_agent_or_stage_content(self):
+        request = {'bundles': [], 'current_html': '<html></html>'}
+        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
+            code, _ = self.post('/api/apply', request, {'Origin': 'https://elsewhere.example'})
+            self.assertEqual(code, 403)
+            agent.assert_not_called()
+            code, _ = self.post('/api/apply', request, {'Origin': 'null'})
+            self.assertEqual(code, 403)
+            agent.assert_not_called()
+            code, _ = self.post('/api/apply', request, {'Host': 'evil.example', 'Origin': 'http://evil.example'})
+            self.assertEqual(code, 403)
+            agent.assert_not_called()
+            code, _ = self.post('/api/apply', request, {'Content-Type': 'text/plain'})
+            self.assertEqual(code, 415)
+            agent.assert_not_called()
+            code, _ = self.post('/api/apply', request, {'Origin': self.url})
+            self.assertEqual(code, 200)
+            agent.assert_called_once()
+        with patch.object(server.Path, 'write_text') as write:
+            code, _ = self.post('/api/publish', {'html': '<html></html>'}, {'Origin': 'https://elsewhere.example'})
+            self.assertEqual(code, 403)
+            write.assert_not_called()
+        stroke = self.stroke()
+        stroke['id'] = 'cross-origin-mark'
+        code, _ = self.post('/api/strokes', stroke, {'Origin': 'https://elsewhere.example'})
+        self.assertEqual(code, 403)
+        with server.STROKES_LOCK:
+            self.assertNotIn(stroke['id'], server.STROKES)
+
+    def test_configured_proxy_origin_rejects_other_hosts_and_origins(self):
+        with patch.object(server, 'STUDIO_ORIGIN', 'https://studio.example'):
+            with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
+                request = {'bundles': [], 'current_html': '<html></html>'}
+                code, _ = self.post('/api/apply', request, {'Host': 'studio.example', 'Origin': 'https://studio.example'})
+                self.assertEqual(code, 200)
+                agent.assert_called_once()
+                code, _ = self.post('/api/apply', request, {'Host': 'studio.example', 'Origin': 'https://elsewhere.example'})
+                self.assertEqual(code, 403)
+                code, _ = self.post('/api/apply', request, {'Host': 'elsewhere.example', 'Origin': 'https://elsewhere.example'})
+                self.assertEqual(code, 403)
+                agent.assert_called_once()
 
     def test_shape_time_and_target_lead_agent_prompt(self):
         with patch.object(server.urllib.request, 'urlopen') as request:

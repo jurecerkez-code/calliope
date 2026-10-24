@@ -16,6 +16,7 @@ import urllib.request
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import websockets
 
@@ -43,6 +44,8 @@ RESON8_TURNS = (
 )
 HTTP_PORT = int(os.environ.get('HTTP_PORT', '8800'))
 AUDIO_PORT = int(os.environ.get('AUDIO_PORT', '8801'))
+# Set this to the exact HTTPS origin only when the loopback server sits behind a trusted proxy.
+STUDIO_ORIGIN = os.environ.get('STUDIO_ORIGIN', '')
 STROKES = {}
 STROKES_LOCK = threading.Lock()
 
@@ -229,6 +232,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        host = self.headers.get('Host', '')
+        try:
+            parsed_host = urlsplit('http://' + host)
+            loopback = parsed_host.hostname in ('127.0.0.1', 'localhost', '::1') and parsed_host.port is not None
+            local_origin = 'http://' + host if loopback else None
+        except ValueError:
+            local_origin = None
+        allowed_origin = STUDIO_ORIGIN if STUDIO_ORIGIN and host == urlsplit(STUDIO_ORIGIN).netloc else local_origin
+        if not allowed_origin or (self.headers.get('Origin') and self.headers['Origin'] != allowed_origin):
+            return self._send(403, {'error': 'origin not allowed'})
+        if self.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+            return self._send(415, {'error': 'application/json required'})
         try:
             n = int(self.headers.get('content-length', 0))
         except ValueError:
