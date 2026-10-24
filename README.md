@@ -36,7 +36,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 
 ## What it does
 
-1. **You draw on the website itself.** No separate whiteboard. Visible pen/highlighter marks land on the preview; each completed stroke keeps its full path, UTC point times, DOM context, and a tentative shape label. Closed marks also get a best-effort element at their centre.
+1. **You draw on the website itself.** No separate whiteboard. Visible pen marks land on the preview; each completed stroke keeps its full path, UTC point times, DOM context, and a tentative shape label. Closed marks also get a best-effort element at their centre.
 2. **You speak while drawing.** Your microphone streams to Reson8. Dim lines are the live guess, solid lines are the committed sentence, all timestamped on the same clock as your marks.
 3. **The agent reasons, then executes in Live mode.** Each committed spoken turn sends its marks to the agent; APPLY also sends marks without speech. It writes one short paragraph of reasoning, then returns updated HTML for the preview. Recording mode saves the same voice-and-mark timeline without calling the agent.
 
@@ -116,7 +116,7 @@ To use another website as the studio canvas, paste its public URL in **Website U
 
 ## Status
 
-**Working locally:** Svelte studio with the branded loader, pen/highlighter drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, Claude reasoning plus preview execution when keyed, and staged publish. The retired Chrome extension and classic page are no longer part of the app.
+**Working locally:** Svelte studio with the branded loader, pen drawing, full-path backend receipts and readback, tentative rough circle/square/triangle hints, time-aligned speech/sketch chunks, Claude reasoning plus preview execution when keyed, and staged publish. The retired Chrome extension and classic page are no longer part of the app.
 
 **Not yet built:** identifying the individual printed word inside an element such as `h1` when circled. Current targeting reports the DOM element; word-range geometry needs its own implementation and browser checks. Shape fixtures are synthetic, so test real hand-drawn traces before treating a tentative label as reliable.
 

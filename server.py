@@ -55,9 +55,9 @@ MARKS = {}
 def valid_stroke(s):
     if not isinstance(s, dict) or not isinstance(s.get('id'), str) or not re.fullmatch(r'[\w-]{1,80}', s['id']):
         return False
-    if s.get('tool') not in ('pen', 'highlighter') or not isinstance(s.get('pts'), list) or not 1 <= len(s['pts']) <= 3000:
+    if s.get('tool') != 'pen' or not isinstance(s.get('pts'), list) or not 1 <= len(s['pts']) <= 3000:
         return False
-    if 'shape' in s and s['shape'] not in ('circle', 'square', 'triangle', 'freehand', 'highlight'):
+    if 'shape' in s and s['shape'] not in ('circle', 'square', 'triangle', 'freehand'):
         return False
     if 'enclosed_element' in s and (not isinstance(s['enclosed_element'], str) or len(s['enclosed_element']) > 200 or any(ord(c) < 32 for c in s['enclosed_element'])):
         return False
@@ -72,7 +72,7 @@ def valid_stroke(s):
     if s.get('coordinate_space') != 'preview-document-css-pixels' or s.get('viewBox') != f"0 0 {viewport['width']} {viewport['height']}":
         return False
     style = s.get('style')
-    if style != ({'color': '#00e05a', 'width': 3} if s['tool'] == 'pen' else {'color': '#ffd166', 'width': 18, 'opacity': 0.45}):
+    if style != {'color': '#00e05a', 'width': 3}:
         return False
     for p in s['pts']:
         if not isinstance(p, dict) or not all(isinstance(p.get(k), (int, float)) and math.isfinite(p[k]) for k in ('x', 'y')):
@@ -116,7 +116,7 @@ def agent_sketch_message(item: dict) -> str:
     bounds = f"x {min(p['x'] for p in points)}–{max(p['x'] for p in points)}, y {min(p['y'] for p in points)}–{max(p['y'] for p in points)}"
     first = paths[0]
     shape = item.get('shape', first.get('shape', 'unknown'))
-    name = {'freehand': 'Freehand mark', 'highlight': 'Highlight', 'circle': 'Circle',
+    name = {'freehand': 'Freehand mark', 'circle': 'Circle',
             'square': 'Square', 'triangle': 'Triangle', 'x': 'X (tentative)'}.get(shape, 'Sketch')
     touched = ', '.join(dict.fromkeys(element for path in paths for element in path.get('elements', []))) or 'background'
     center = item.get('enclosed_element', first.get('enclosed_element', ''))

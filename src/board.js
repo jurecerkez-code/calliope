@@ -3,10 +3,7 @@
 // Styles are inline attributes so the PNG export looks the same as the screen.
 const NS = "http://www.w3.org/2000/svg";
 export const BOARD = { width: 2400, height: 1600 };
-const INK = {
-	pen: { stroke: "#37ff8b", width: 3, opacity: 1 },
-	highlighter: { stroke: "#ffd166", width: 18, opacity: 0.45 },
-};
+const INK = { stroke: "#37ff8b", width: 3, opacity: 1 };
 
 function el(tag, attrs = {}, text) {
 	const node = document.createElementNS(NS, tag);
@@ -17,7 +14,7 @@ function el(tag, attrs = {}, text) {
 const pathFor = (pts) =>
 	"M " + pts.map((p) => `${Math.round(p.x)} ${Math.round(p.y)}`).join(" L ");
 
-export function attachBoard(svg, { tool, elapsed, onStroke }) {
+export function attachBoard(svg, { elapsed, onStroke }) {
 	svg.setAttribute("viewBox", `0 0 ${BOARD.width} ${BOARD.height}`);
 	svg.setAttribute("width", BOARD.width);
 	svg.setAttribute("height", BOARD.height);
@@ -64,19 +61,17 @@ export function attachBoard(svg, { tool, elapsed, onStroke }) {
 		try {
 			svg.setPointerCapture(e.pointerId);
 		} catch (_) {}
-		const t = tool(),
-			style = INK[t] || INK.pen,
-			p = point(e);
+		const p = point(e);
 		cur = {
 			id: `S${next++}`,
-			tool: t,
+			tool: "pen",
 			points: [p],
 			pointerId: e.pointerId,
 			path: el("path", {
 				fill: "none",
-				stroke: style.stroke,
-				"stroke-width": style.width,
-				"stroke-opacity": style.opacity,
+				stroke: INK.stroke,
+				"stroke-width": INK.width,
+				"stroke-opacity": INK.opacity,
 				"stroke-linecap": "round",
 				"stroke-linejoin": "round",
 				d: pathFor([p, p]),

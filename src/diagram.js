@@ -45,19 +45,14 @@ function tipOf(points) {
 	);
 }
 
-// strokes: [{id, tool, points:[{x,y,t}]}] in board CSS pixels, t in session ms.
+// strokes: [{id, tool:'pen', points:[{x,y,t}]}] in board CSS pixels, t in session ms.
 export function classifyStrokes(strokes) {
 	return strokes.map((s) => {
 		const rec = { ...makeStroke(s.id, s.points), tool: s.tool || "pen" };
-		const recognised =
-			rec.tool === "pen" ? recognizeShape(s.points).shape : "highlight";
+		const recognised = recognizeShape(s.points).shape;
 		rec.kind =
 			NODE_SHAPES[recognised] ||
-			(rec.tool === "pen" && rec.shape === "closed-loop"
-				? "blob"
-				: recognised === "highlight"
-					? "highlight"
-					: rec.shape);
+			(rec.shape === "closed-loop" ? "blob" : rec.shape);
 		rec.tip = tipOf(rec.points);
 		return rec;
 	});
@@ -152,7 +147,7 @@ export function buildDiagram(strokes, utterances) {
 	}
 	// Edges first, so small marks next to an edge's tip can be read as its arrowhead.
 	for (const r of recs) {
-		if (owner[r.id] || r.kind === "highlight" || diag(r.bbox) <= SMALL)
+		if (owner[r.id] || diag(r.bbox) <= SMALL)
 			continue;
 		const from = nodeAt(nodes, r.points[0]);
 		const to = nodeAt(nodes, r.tip);

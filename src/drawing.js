@@ -28,7 +28,7 @@ function domRef(el) {
 const pathFor = pts => 'M ' + pts.map(p => `${p.x} ${p.y}`).join(' L ');
 
 // Imperative drawing lives in the inert same-origin iframe; Svelte never re-renders its contents.
-export function attachDrawing(iframe, {tool, elapsed, onStart, onMove, onFinish}) {
+export function attachDrawing(iframe, {elapsed, onStart, onMove, onFinish}) {
   const doc = iframe.contentDocument;
   if (!doc?.body) return {clear() {}};
   const overlay = doc.createElement('canvas');
@@ -52,12 +52,12 @@ export function attachDrawing(iframe, {tool, elapsed, onStart, onMove, onFinish}
   overlay.addEventListener('pointerdown', e => {
     if (cur) return;
     try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
-    const p = point(e), selected = tool(), s = sel(hit(e.clientX,e.clientY));
+    const p = point(e), s = sel(hit(e.clientX,e.clientY));
     const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
-    cur = {id:Array.from(bytes,b => b.toString(16).padStart(2,'0')).join(''),tool:selected,t:elapsed(),pts:[p],elements:s?[s]:[]};
+    cur = {id:Array.from(bytes,b => b.toString(16).padStart(2,'0')).join(''),tool:'pen',t:elapsed(),pts:[p],elements:s?[s]:[]};
     cur.pathEl = doc.createElementNS(NS,'path');
-    for (const [k,v] of Object.entries({'fill':'none','stroke':selected==='highlighter'?'#ffd166':'#00e05a',
-      'stroke-width':selected==='highlighter'?'18':'3','stroke-opacity':selected==='highlighter'?'0.45':'1',
+    for (const [k,v] of Object.entries({'fill':'none','stroke':'#00e05a',
+      'stroke-width':'3','stroke-opacity':'1',
       'stroke-linecap':'round','stroke-linejoin':'round','d':`M ${p.x} ${p.y} L ${p.x} ${p.y}`})) cur.pathEl.setAttribute(k,v);
     svg.appendChild(cur.pathEl);
     onStart(cur); e.preventDefault();

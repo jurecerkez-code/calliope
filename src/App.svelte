@@ -14,7 +14,7 @@
   import { buildArtifact, createLiveQueue, eventsForMode } from './modes.js';
   let feed, prev, eq, boardEl;
   let status = $state('CHOOSE HOW TO START.');
-  let rows = $state([]), tool = $state('pen'), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
+  let rows = $state([]), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
   let imported = $state(false);
   let secure = $state(false), publishEnabled = $state(true);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
@@ -69,7 +69,7 @@
     prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https:; img-src data: https:; font-src https:; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri https:">`+html;
   }
   function previewLoaded(){drawing=attachDrawing(prev,{
-    tool:()=>tool,elapsed,
+    elapsed,
     onStart:stroke=>{if(strokeModes.size&&[...strokeModes.values()].some(m=>m!==operation))void markQueue.flush();markQueue.hold();strokeModes.set(stroke.id,operation);activeStroke=true;rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
     onMove:stroke=>{rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,'DRAWING')}:row);scroll();},
     onFinish:(stroke,payload,summary)=>{
@@ -221,7 +221,7 @@
     if(next==='live')void flushed.then(()=>{if(mode==='website'&&operation==='live'&&version===modeVersion)resumeLive();});
   }
   onMount(()=>{
-    board=attachBoard(boardEl,{tool:()=>tool,elapsed,onStroke:onCanvasStroke});
+    board=attachBoard(boardEl,{elapsed,onStroke:onCanvasStroke});
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
       audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurn:turn=>{
         if(mode==='canvas') addCanvasUtterance(turn,'reson8');
@@ -287,7 +287,6 @@
       {:else}
         <Button id="btnClear" variant="amber" onclick={clearMarks}>CLEAR MARKS</Button>
       {/if}
-      <Button id="btnTool" onclick={() => tool=tool==='pen'?'highlighter':'pen'}>TOOL: {tool.toUpperCase()}</Button>
     </div>
     {#if mode==='canvas'}
       <div class="diagram" aria-label="Diagram so far">
