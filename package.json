@@ -2,7 +2,7 @@
   "private": true,
   "scripts": {
     "build": "vite build",
-    "test": "node --test test/test_frontend.mjs test/test_rough_payload.mjs test/test_shape_recognition.js test/test_fusion.js test/test_diagram.mjs test/test_pi_edit.mjs"
+    "test": "node --test test/test_frontend.mjs test/test_rough_payload.mjs test/test_shape_recognition.js test/test_fusion.js test/test_diagram.mjs test/test_pi_edit.mjs test/test_apply_stream.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
