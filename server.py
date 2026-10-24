@@ -322,11 +322,10 @@ def build_agent_prompt(bundles: list, current_html: str, relations: list | None 
         "REFERENCE lines bind spoken pointing words (this/that/here) to the sketch they refer to; "
         "trust a REFERENCE over your own guess of which mark matters. "
         "A shape is not a command. Infer the requested change from the spoken words too.\n\n"
-        "REASON FIRST: one short paragraph. What does the user want changed, combining words "
-        "and sketches? Note conflicts between words and marks explicitly.\n"
-        "THEN EXECUTE: return the COMPLETE updated HTML (single file, inline CSS, no external "
+        "Resolve conflicts between words and marks before editing. "
+        "Return the COMPLETE updated HTML (single file, inline CSS, no external "
         "requests, no markdown fences). Apply exactly this turn's requested changes, keep the rest.\n\n"
-        'Answer as JSON: {"reasoning": "...", "html": "<!DOCTYPE html>..."}\n\n'
+        'Answer as JSON: {"html": "<!DOCTYPE html>..."}. No reasoning or explanation is required.\n\n'
         "TURN TIMELINE (words + sketches, one clock):\n"
         + "\n".join(timeline_desc)
         + ("\n\nARROWS BETWEEN MARKS (start and tip name the intended move or link):\n" + "\n".join(lines)
