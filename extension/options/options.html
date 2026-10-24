@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Draw and Talk Options</title>
+  <link rel="stylesheet" href="../sidepanel/panel.css">
+  <style>
+    body { max-width: 560px; margin: 24px auto; padding: 0 16px; }
+    label { display: block; font-weight: 600; margin: 10px 0 4px; }
+    input[type="password"], input[type="text"], select {
+      width: 100%; font: inherit; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+    }
+    .status { min-height: 1.4em; margin: 8px 0 0; }
+    .ok { color: #30a46c; }
+    .bad { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <h1>Draw and Talk</h1>
+
+  <section class="card" id="key-card" aria-labelledby="h-key">
+    <h2 id="h-key">Reson8 API key</h2>
+    <p class="hint">Stored only in this browser (<code>chrome.storage.local</code>). The extension sends it only to <code>api.reson8.dev/v1/auth/token</code> to get a 10-minute access token; the side panel uses that token, never the key.</p>
+    <label for="key">API key</label>
+    <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the key from console.reson8.dev">
+    <label for="lang">Language</label>
+    <select id="lang">
+      <option value="en">English</option>
+      <option value="nl">Dutch</option>
+      <option value="de">German</option>
+      <option value="fr">French</option>
+      <option value="es">Spanish</option>
+      <option value="it">Italian</option>
+      <option value="pl">Polish</option>
+      <option value="pt">Portuguese</option>
+      <option value="sv">Swedish</option>
+      <option value="fy">Frisian</option>
+    </select>
+    <div class="row" style="margin-top: 12px">
+      <button id="save" class="btn primary" type="button">Save</button>
+      <button id="test" class="btn" type="button">Test key</button>
+      <button id="show" class="btn subtle" type="button" aria-pressed="false">Show</button>
+      <button id="clear" class="btn subtle" type="button">Remove key</button>
+    </div>
+    <p id="key-status" class="status" role="status"></p>
+  </section>
+
+  <section class="card" id="mic" aria-labelledby="h-mic">
+    <h2 id="h-mic">Microphone</h2>
+    <p class="hint">Chrome cannot show the microphone prompt inside a side panel. Grant access here once; the panel can then use the microphone.</p>
+    <div class="row">
+      <button id="grant-mic" class="btn primary" type="button">Grant microphone</button>
+    </div>
+    <p id="mic-status" class="status" role="status"></p>
+  </section>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>
