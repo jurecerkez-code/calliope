@@ -13,7 +13,7 @@
   import { simulateWords, MS_PER_WORD } from './lib/fusion.js';
   let feed, prev, eq, boardEl;
   let status = $state('CHOOSE HOW TO START.');
-  let rows = $state([]), tool = $state('pen'), typed = $state(''), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
+  let rows = $state([]), typed = $state(''), url = $state(''), importError = $state(''), busy = $state(false), micOn = $state(false);
   let imported = $state(false);
   let secure = $state(false), publishEnabled = $state(true);
   // Blank canvas mode: draw and talk to explain a concept; the result is a diagram packet.
@@ -62,7 +62,7 @@
     prev.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https:; img-src data: https:; font-src https:; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri https:">`+html;
   }
   function previewLoaded(){drawing=attachDrawing(prev,{
-    tool:()=>tool,elapsed,
+    elapsed,
     onStart:stroke=>{markQueue.hold();activeStroke=true;rows=[...rows,{key:stroke.id,cls:'coord',text:rowText(stroke,'DRAWING'),clock:fmt(elapsed()),stroke}];scroll();},
     onMove:stroke=>{rows=rows.map(row=>row.key===stroke.id?{...row,text:rowText(stroke,'DRAWING')}:row);scroll();},
     onFinish:(stroke,payload,summary)=>{
@@ -182,7 +182,7 @@
   async function downloadPng(){const blob=await board.exportPng();if(blob)download(blob);else addLine('err','NOTHING DRAWN YET.');}
   function setMode(m){mode=m;status=m==='canvas'?'BLANK CANVAS. DRAW AND EXPLAIN OUT LOUD; NAME THINGS BY POINTING: "THIS IS THE API".':'SPEAK WHILE YOU DRAW ON THE PAGE. THE AGENT SEES BOTH.';}
   onMount(()=>{
-    board=attachBoard(boardEl,{tool:()=>tool,elapsed,onStroke:onCanvasStroke});
+    board=attachBoard(boardEl,{elapsed,onStroke:onCanvasStroke});
     fetch('/api/config').then(r=>{if(!r.ok)throw new Error('config unavailable');return r.json();}).then(config=>{
       audio=createAudio(eq,{port:config.audioPort,onLine:addLine,elapsed,onTurn:turn=>{
         if(mode==='canvas') addCanvasUtterance(turn,'reson8');
@@ -240,7 +240,6 @@
       {:else}
         <Button id="btnClear" variant="amber" onclick={clearMarks}>CLEAR MARKS</Button>
       {/if}
-      <Button id="btnTool" onclick={() => tool=tool==='pen'?'highlighter':'pen'}>TOOL: {tool.toUpperCase()}</Button>
     </div>
     {#if mode==='canvas'}
       <div class="row"><Input id="said" aria-label="Type what you would say" placeholder="...or type what you would say" bind:value={said} oninput={onSaidInput} onkeydown={e => {if(e.key==='Enter'){e.preventDefault();saySimulated();}}} /><Button id="btnSay" onclick={saySimulated}>SAY</Button></div>

@@ -10,7 +10,7 @@ const pts = [[10,20], [25,30], [40,20]].map(([x,y]) => ({x,y,utc:'2026-10-24T12:
 
 test('one complete immutable stroke per timeline event, with ordered points and UTC', () => {
   const first = makePayload({id:'a', tool:'pen', t:1, pts, elements:['button#download']}, 4, {width:949,height:2862}, 'button#download');
-  const second = makePayload({id:'b', tool:'highlighter', t:5, pts, elements:['button#download']}, 8, {width:949,height:2862}, '');
+  const second = makePayload({id:'b', tool:'pen', t:5, pts, elements:['button#download']}, 8, {width:949,height:2862}, '');
   assert.equal(Object.isFrozen(first), true);
   assert.equal(Object.isFrozen(first.pts[0]), true);
   assert.equal(first.path, 'M 10 20 L 25 30 L 40 20');
@@ -261,6 +261,19 @@ test('studio exposes URL import in its existing preview', () => {
   assert.match(app, /\/api\/import/);
   assert.match(app, /aria-label="Website URL"/);
   assert.match(app, /previewHtml\(out\.html\)/);
+});
+
+test('both studio surfaces draw pen only, without a tool switch', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  const drawing = readFileSync(new URL('./src/drawing.js', import.meta.url), 'utf8');
+  const board = readFileSync(new URL('./src/board.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /btnTool|highlighter/);
+  assert.doesNotMatch(drawing, /highlighter/);
+  assert.doesNotMatch(board, /highlighter/);
+  assert.match(app, /btnClear/);
+  assert.match(app, /btnUndo/);
+  const pen = makePayload({id:'pen-only',tool:'pen',t:1,pts,elements:['button#download']},2,{width:949,height:2862},'');
+  assert.deepEqual(pen.style,{color:'#00e05a',width:3});
 });
 
 test('startup offers website import or a blank canvas without loading a demo site', () => {
