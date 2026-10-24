@@ -342,6 +342,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class ProviderAnswerError(ValueError):
+    """The provider replied, but not with an executable complete document."""
+
+
 def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None) -> dict:
     """Send the exact built message; return reasoning and updated HTML."""
     if prompt is None:
@@ -361,29 +365,46 @@ def lyceum_apply(bundles: list, current_html: str, prompt: str | None = None) ->
         },
     )
     with urllib.request.build_opener(NoRedirect).open(req, timeout=120) as response:
-        resp = json.load(response)
-    choice = resp['choices'][0]
+        try:
+            resp = json.load(response)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed provider response') from e
+    choices = resp.get('choices') if isinstance(resp, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid response')
+    choice = choices[0]
     if choice.get('finish_reason') != 'stop':
-        raise ValueError('Lyceum returned no complete HTML answer')
-    text = (choice['message'].get('content') or '').strip()
+        reason = 'output limit reached' if choice.get('finish_reason') == 'length' else 'generation did not finish'
+        raise ProviderAnswerError(f'Lyceum returned no complete HTML answer: {reason}')
+    message = choice.get('message')
+    if not isinstance(message, dict):
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid message')
+    content = message.get('content')
+    if content is not None and not isinstance(content, str):
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid content')
+    text = (content or '').strip()
+    if not text:
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: empty answer')
     # tolerant JSON parse: strip code fences if the model wrapped the answer
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
-        raise ValueError('Lyceum returned no complete HTML answer')
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed JSON')
     try:
         out = json.loads(m.group(0))
+        if not isinstance(out, dict):
+            raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed JSON')
         html = out.get("html", "")
         if not isinstance(html, str):
-            raise ValueError('Lyceum returned no complete HTML answer')
+            raise ProviderAnswerError('Lyceum returned no complete HTML answer: invalid HTML field')
         html = html.strip()
         if html.startswith("```"):
             html = re.sub(r"^```[a-z]*\n?|```$", "", html.strip())
         if not (re.search(r'<html(?:\s|>)', html, re.IGNORECASE) and
                 re.search(r'</html\s*>\s*\Z', html, re.IGNORECASE)):
-            raise ValueError('Lyceum returned no complete HTML answer')
+            raise ProviderAnswerError('Lyceum returned no complete HTML answer: incomplete HTML')
         return {"reasoning": out.get("reasoning", ""), "html": html}
     except json.JSONDecodeError as e:
-        raise ValueError('Lyceum returned no complete HTML answer') from e
+        raise ProviderAnswerError('Lyceum returned no complete HTML answer: malformed JSON') from e
 
 
 # ---------- HTTP ----------
@@ -533,6 +554,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = lyceum_apply(bundles, html, prompt=prompt)
                 out['agent_message'] = prompt
                 self._send(200, out)
+            except ProviderAnswerError as e:
+                self._send(502, {'error': str(e), 'agent_message': prompt})
             except Exception as e:  # surface the error to the UI, never crash the demo
                 self._send(500, {"error": str(e), 'agent_message': prompt})
         elif self.path == "/api/publish":
