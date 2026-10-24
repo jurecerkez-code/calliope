@@ -4,8 +4,7 @@
 // Pure functions over plain data; no DOM.
 
 import { buildTimeline, fuse } from "./lib/fusion.js";
-import { classifyShape, makeStroke } from "./lib/strokes.js";
-import { recognizeShape } from "./shape-recognition.js";
+import { classifyShape, makeStroke, pathLength } from "./lib/strokes.js";
 
 const NEAR = 28; // px around a node that still counts as touching it
 const SMALL = 40; // strokes up to this size near an edge end are arrowheads
@@ -55,15 +54,7 @@ export function connect(nodes, points) {
 export function classifyStrokes(strokes) {
 	return strokes.map((s) => {
 		const rec = { ...makeStroke(s.id, s.points), tool: s.tool || "pen" };
-		const recognised =
-			rec.tool === "pen" ? recognizeShape(s.points).shape : "highlight";
-		rec.kind =
-			NODE_SHAPES[recognised] ||
-			(rec.tool === "pen" && rec.shape === "closed-loop"
-				? "blob"
-				: recognised === "highlight"
-					? "highlight"
-					: rec.shape);
+		rec.kind = rec.tool === "pen" ? NODE_SHAPES[rec.shape] || rec.shape : "highlight";
 		rec.tip = tipOf(rec.points);
 		return rec;
 	});
@@ -143,7 +134,7 @@ export function buildDiagram(strokes, utterances) {
 	const owner = {}; // strokeId -> {type, item}
 
 	for (const r of recs) {
-		if (["box", "circle", "triangle", "blob"].includes(r.kind)) {
+		if (["box", "circle", "triangle"].includes(r.kind)) {
 			const n = {
 				id: `N${nodes.length + 1}`,
 				shape: r.kind,
@@ -157,8 +148,15 @@ export function buildDiagram(strokes, utterances) {
 		}
 	}
 	// Edges first, so small marks next to an edge's tip can be read as its arrowhead.
-	for (const r of recs) {
+	for (const [i, r] of recs.entries()) {
 		if (owner[r.id] || r.kind === "highlight" || diag(r.bbox) <= SMALL)
+			continue;
+		// Curved arrows may be freehand, but a loop crossing two nodes is not an edge.
+		// Measure the original path: simplification can hide dense detours.
+		const rawPoints = strokes[i].points;
+		const start = rawPoints[0], end = rawPoints.at(-1);
+		if (r.kind !== "line" &&
+			Math.hypot(end.x - start.x, end.y - start.y) < pathLength(rawPoints) * 0.6)
 			continue;
 		const from = nodeAt(nodes, r.points[0]);
 		const to = nodeAt(nodes, r.tip);
@@ -237,7 +235,6 @@ const MERMAID_SHAPE = {
 	box: (l) => `[${l}]`,
 	circle: (l) => `((${l}))`,
 	triangle: (l) => `{${l}}`,
-	blob: (l) => `(${l})`,
 };
 
 export function toMermaid({ nodes, edges }) {

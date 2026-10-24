@@ -1,4 +1,5 @@
-// Stroke geometry: simplification, bounding box, rough shape class.
+// Stroke geometry: simplification, bounding box, and rendering.
+import { recognizeShape } from "../shape-recognition.js";
 // Points are { x, y, t } in page CSS pixels; t is session time in ms.
 // No DOM or chrome.* access here, so it runs in the page, the panel, and Node tests.
 
@@ -127,7 +128,7 @@ export function anchorOf(shape, points, box) {
 export function makeStroke(id, rawPoints) {
 	const points = simplify(rawPoints);
 	const box = bboxOf(rawPoints);
-	const shape = classifyShape(rawPoints);
+	const shape = recognizeShape(rawPoints).shape;
 	const round = (n) => Math.round(n * 10) / 10;
 	return {
 		id,

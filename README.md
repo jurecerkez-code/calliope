@@ -48,7 +48,7 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026.
 
 Not every idea starts from a page. Choose **START BLANK CANVAS** on the opening screen to explain a flow, a draft, or a system design on an empty board while you talk. You can switch modes in the header afterward.
 
-- **Shapes become nodes.** Boxes, circles and triangles (and any closed loop) become nodes N1, N2, ....
+- **Recognized shapes become nodes.** Boxes, circles and triangles become nodes N1, N2, .... Unrecognized loops stay annotations rather than becoming guessed nodes. The canvas and website use the same stroke-shape recognizer; they interpret the resulting marks differently.
 - **Lines between shapes become edges.** A stroke that starts at one shape and ends at another becomes an edge E1, E2, ... in the direction you drew it. A small tick at its end is read as the arrowhead.
 - **Your words name things.** Point while you speak: "this is the API gateway", "here we have the user database", "call this the cache", "this sends the token". Each "this" or "here" binds to the mark drawn closest in time, using Reson8's word timestamps, and the name appears on the board.
 - **COPY FOR AGENT** puts a Mermaid diagram, every spoken sentence with its timing and what it pointed at, and the full JSON on the clipboard. **COPY PNG** adds the drawing. Paste both into any agent (Claude, ChatGPT, Cursor, ...). Speech needs a Reson8 key and network connection.
