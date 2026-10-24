@@ -30,6 +30,13 @@ Built at the Jamie Agentic AI Hack in Berlin, 24 October 2026. Team: Jure Cerkez
   <img src="assets/flow.svg" alt="The loop: you, one clock, Reson8, Claude, preview" width="900">
 </p>
 
+### Two modes
+
+A toggle in the header switches between them at any time:
+
+- **RECORDING** tracks your marks and your voice on one clock and does not call the agent. **COPY ARTIFACT** puts a Markdown summary plus JSON (transcript chunks, shapes, bounds, DOM targets, raw SVG paths) on the clipboard, ready to paste into any agent. Typed text is added as a note.
+- **LIVE** sends each committed spoken turn, with the marks drawn since the last one, straight to the agent, which rewrites the preview. One call runs at a time; turns spoken during a call go out right after it. Marks alone wait for speech, and **APPLY** sends them immediately.
+
 ## Why this shape
 
 - **Chunks are the trick.** Short enough to react during a meeting, long enough to carry context. Each transcript chunk travels with the sketches made in its window. A stroke that crosses a boundary is sent whole, never cut in half.

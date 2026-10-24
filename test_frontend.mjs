@@ -38,3 +38,42 @@ test('Calliope retains its brand and staged publish control in the migrated stud
   assert.match(app, /\/api\/publish/);
   assert.match(app, /PUBLISH/);
 });
+
+test('recording artifact keeps words and marks on one clock, as markdown plus JSON', async () => {
+  const { buildArtifact } = await import('./src/modes.js');
+  assert.equal(buildArtifact([]), '');
+  const stroke = makePayload({id:'s1', tool:'pen', t:2500, pts, elements:['button#download']}, 3100, {width:949,height:2862}, '');
+  const text = buildArtifact([
+    {kind:'transcript', t:2000, text:'make this button green'},
+    {kind:'stroke', t:2500, t_end:3100, payload:stroke}
+  ], {page:'Demo', startedAt:'2026-10-24T12:00:00.000Z'});
+  assert.match(text, /^# Calliope recording/);
+  assert.match(text, /## \[00:02\] make this button green/);
+  assert.match(text, /- \[00:02-00:03\] pen freehand, x 10-40, y 20-30, over button#download/);
+  const json = JSON.parse(text.split('```json\n')[1].split('\n```')[0]);
+  assert.equal(json.bundles[0].strokes[0].path, 'M 10 20 L 25 30 L 40 20');
+  assert.equal(json.bundles[0].strokes[0].pts, undefined);
+});
+
+test('live queue never runs two agent calls at once and re-runs once for requests made mid-flight', async () => {
+  const { createLiveQueue } = await import('./src/modes.js');
+  let calls = 0, active = 0, maxActive = 0, release;
+  const request = createLiveQueue(async () => {
+    calls++; active++; maxActive = Math.max(maxActive, active);
+    await new Promise(r => { release = r; });
+    active--;
+  });
+  const first = request();
+  request(); request();
+  release(); await new Promise(r => setTimeout(r));
+  release(); await first;
+  assert.equal(calls, 2);
+  assert.equal(maxActive, 1);
+});
+
+test('studio offers a recording/live toggle', () => {
+  const app = readFileSync(new URL('./src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /role="radiogroup"/);
+  assert.match(app, /COPY ARTIFACT/);
+  assert.match(app, /if\(mode==='live'\)requestApply\(\)/);
+});
