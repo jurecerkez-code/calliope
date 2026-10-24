@@ -15,6 +15,10 @@ export function makePayload(stroke, t_end, viewport, enclosed_element) {
   };
   const summary = describeSketch(candidate);
   candidate.shape = summary.kind;
+  if (summary.kind === 'line') {
+    candidate.angle_deg = summary.angle_deg;
+    candidate.direction = summary.direction;
+  }
   if (!['circle','square','triangle'].includes(summary.kind)) candidate.enclosed_element = '';
   Object.freeze(pts); Object.freeze(candidate.elements);
   Object.freeze(candidate.viewport); Object.freeze(bbox); Object.freeze(candidate.style);

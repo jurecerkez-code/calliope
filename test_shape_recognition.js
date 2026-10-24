@@ -55,7 +55,7 @@ for (const [name, points, expected] of positives) {
   });
 }
 const negatives = [
-  ['long open line', Array.from({ length: 35 }, (_, i) => ({ x: 10 + i * 8, y: 35 + Math.sin(i) * 2 }))],
+  ['bent open line', Array.from({ length: 35 }, (_, i) => ({ x: 10 + i * 8, y: 35 + 20 * Math.sin(i * Math.PI / 34) }))],
   ['L mark', [[10, 10], [10, 80], [115, 80]]],
   ['U mark', [[10, 10], [10, 75], [30, 86], [95, 86], [115, 75], [115, 10]]],
   ['three sides of box', [[20, 20], [135, 20], [135, 90], [20, 90]]],
@@ -77,6 +77,20 @@ for (const [name, coords] of negatives) {
     assert.equal(JSON.stringify(points), before);
   });
 }
+
+test('line orientation is independent of stroke order; short marks and retraces stay freehand', async () => {
+  const { recognizeShape } = await recognizer;
+  const rising = Array.from({length: 18}, (_, i) => ({x: 10 + 10 * i, y: 190 - 10 * i}));
+  const expected = recognizeShape(rising);
+  assert.equal(expected.shape, 'line');
+  assert.equal(expected.angle_deg, 45);
+  assert.deepEqual(recognizeShape([...rising].reverse()), expected);
+  const vertical = Array.from({length: 18}, (_, i) => ({x: 50, y: 10 + 10 * i}));
+  assert.deepEqual(recognizeShape(vertical), recognizeShape([...vertical].reverse()));
+  assert.equal(recognizeShape(vertical).angle_deg, 90);
+  assert.equal(recognizeShape([{x:0,y:0},{x:15,y:0}]).shape, 'freehand');
+  assert.equal(recognizeShape([...rising, ...[...rising].reverse()]).shape, 'freehand');
+});
 
 test('production ESM recognizer is importable by the frontend', async () => {
   const { recognizeShape } = await recognizer;

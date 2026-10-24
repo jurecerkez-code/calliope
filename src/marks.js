@@ -25,6 +25,7 @@ export function makeMark(strokes) {
   const first=strokes[0], last=strokes.at(-1);
   return Object.freeze({id:first.id,t:first.t,t_end:last.t_end,
     shape:strokes.length === 2 ? 'x' : first.shape,
+    ...(strokes.length === 1 && first.shape === 'line' ? {angle_deg:first.angle_deg, direction:first.direction} : {}),
     enclosed_element:strokes.length === 2 ? '' : first.enclosed_element,
     strokes:Object.freeze([...strokes])});
 }
