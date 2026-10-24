@@ -1,9 +1,41 @@
 import { buildBundles } from './timeline.js';
-import { classifyIntent } from './lib/fusion.js';
+import { classifyIntent, DEFAULT_WINDOW } from './lib/fusion.js';
 import { isWebsiteMark } from './diagram.js';
 
 export const MODES = ['recording', 'live'];
 export const eventsForMode = (timeline, mode) => timeline.filter(event => event.mode === mode);
+
+// Select one final turn at a time. Receipt order is irrelevant: capture time
+// decides which sketches belong to the turn. A move may finish with an arrow
+// just after speech, so retain that arrow and its source as one instruction.
+export function nextLiveEvents(events, relations) {
+  const live=eventsForMode(events,'live');
+  const turn=live.find(e=>e.kind==='transcript');
+  if(!turn)return live.filter(e=>e.kind==='stroke');
+  const marks=live.filter(e=>e.kind==='stroke');
+  const selected=new Set(marks.filter(e=>e.t <= (turn.t_end ?? turn.t) && (e.t_end ?? e.t) >= turn.t));
+  if(classifyIntent(turn.text)==='move') {
+    const next=live.find(e=>e.kind==='transcript'&&e!==turn);
+    const sources=marks.filter(e=>isWebsiteMark(e.payload)&&
+      e.t>=turn.t-DEFAULT_WINDOW.beforeMs&&
+      e.t<=(turn.t_end??turn.t)+DEFAULT_WINDOW.afterMs&&
+      (!next||e.t<next.t));
+    if(sources.length){
+      const during=sources.filter(e=>e.t>=turn.t&&e.t-turn.t<=5000);
+      const eligible=relations.filter(r=>(r.kind==='move'||r.kind==='link')&&
+        sources.some(e=>e.payload.strokes[0].id===r.from?.stroke)&&
+        Math.abs((marks.find(e=>e.payload.id===r.arrow)?.t??Infinity)-turn.t)<=5000&&
+        (!next||marks.find(e=>e.payload.id===r.arrow)?.t<next.t));
+      const source=(eligible.length ? sources.filter(e=>eligible.some(r=>r.from.stroke===e.payload.strokes[0].id)) :
+        during.length?during:sources).reduce((best,e)=>
+        Math.abs(e.t-turn.t)<Math.abs(best.t-turn.t)?e:best);
+      selected.add(source);
+      const relation=eligible.find(r=>r.from?.stroke===source.payload.strokes[0].id);
+      if(relation){const arrow=marks.find(e=>e.payload.id===relation.arrow);if(arrow)selected.add(arrow);}
+    }
+  }
+  return [turn,...marks.filter(e=>selected.has(e))];
+}
 
 // Keep a spoken move with its circled source until an arrow supplies the
 // destination. Otherwise live speech APPLY consumes the circle before the

@@ -2,7 +2,7 @@
 // real audio timing (Reson8 start_ms / words) so marks and words share one clock.
 import { adaptTurn } from './timeline.js';
 
-export function createAudio(canvas, {port, onLine, onTurn, elapsed}) {
+export function createAudio(canvas, {port, onLine, onTurn, onTurnStart, elapsed}) {
   const ctx = canvas.getContext('2d');
   let ws=null, audioCtx=null, analyser=null, stream=null, frame=0;
   let lastCandidate=null, audioStartMs=null;
@@ -46,7 +46,7 @@ export function createAudio(canvas, {port, onLine, onTurn, elapsed}) {
           const type=msg.type||'',text=msg.text||'';
           if(type==='turn_end_candidate'){if(text){lastCandidate=msg;onLine('inter',text);}return;}
           if(type==='turn_end'){commit(msg);return;}
-          if(type==='turn_start'){lastCandidate=null;onLine('inter','(listening)');return;}
+          if(type==='turn_start'){lastCandidate=null;onTurnStart?.();onLine('inter','(listening)');return;}
           if(text) onLine('inter',text);
         };
         ws.onopen=()=>{audioStartMs=null;lastCandidate=null;onLine('fin','RESON8 LINK UP (calliope). SPEAK.');};
