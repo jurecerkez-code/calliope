@@ -14,6 +14,12 @@ import server
 import import_site
 
 
+def lyceum_reply(reasoning='ok', html='<html></html>'):
+    return json.dumps({'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
+        'reasoning': reasoning, 'html': html
+    })}}]}).encode()
+
+
 class StudioTest(unittest.TestCase):
     def setUp(self):
         with server.STROKES_LOCK:
@@ -55,7 +61,7 @@ class StudioTest(unittest.TestCase):
 
     def test_stroke_receipt_readback_and_apply_gate(self):
         stroke = self.stroke()
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply') as agent:
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply') as agent:
             code, _ = self.post('/api/apply', {'bundles': [{'strokes': [stroke]}], 'current_html': '<html></html>'})
             self.assertEqual(code, 409)
             agent.assert_not_called()
@@ -83,7 +89,7 @@ class StudioTest(unittest.TestCase):
                     'to': {'stroke': None, 'target': 'section#destination', 'text': 'Destination',
                            'x': 200, 'y': 30}}
         payload = {'bundles': [{'strokes': items}], 'relations': [relation], 'current_html': '<html></html>'}
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply', return_value={'html': '<html></html>'}) as agent:
             code, _ = self.post('/api/apply', {'bundles': [], 'relations': [relation]})
             self.assertEqual(code, 400)
             agent.assert_not_called()
@@ -153,7 +159,7 @@ class StudioTest(unittest.TestCase):
         self.assertTrue(all(server.valid_mark(item) for item in items))
         for item in items:
             self.assertEqual(self.post('/api/marks', item)[0], 201)
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply', return_value={'html': '<html></html>'}) as agent:
             code, response = self.post('/api/apply', {'bundles': [{'strokes': items}], 'relations': [relation]})
             self.assertEqual(code, 200, response)
             agent.assert_called_once()
@@ -178,7 +184,7 @@ class StudioTest(unittest.TestCase):
         self.assertTrue(server.is_website_loop(loop))
         for item in items:
             self.assertEqual(self.post('/api/marks', item)[0], 201)
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply') as agent:
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply') as agent:
             code, _ = self.post('/api/apply', {'bundles': [{'strokes': items}], 'relations': [relation]})
             self.assertEqual(code, 400)
             agent.assert_not_called()
@@ -199,7 +205,7 @@ class StudioTest(unittest.TestCase):
 
     def test_cross_origin_post_cannot_invoke_agent_or_stage_content(self):
         request = {'bundles': [], 'current_html': '<html></html>'}
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply', return_value={'html': '<html></html>'}) as agent:
             code, _ = self.post('/api/apply', request, {'Origin': 'https://elsewhere.example'})
             self.assertEqual(code, 403)
             agent.assert_not_called()
@@ -228,7 +234,7 @@ class StudioTest(unittest.TestCase):
 
     def test_configured_proxy_origin_rejects_other_hosts_and_origins(self):
         with patch.object(server, 'STUDIO_ORIGIN', 'https://studio.example'):
-            with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply', return_value={'html': '<html></html>'}) as agent:
+            with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply', return_value={'html': '<html></html>'}) as agent:
                 request = {'bundles': [], 'current_html': '<html></html>'}
                 code, _ = self.post('/api/apply', request, {'Host': 'studio.example', 'Origin': 'https://studio.example'})
                 self.assertEqual(code, 200)
@@ -253,12 +259,104 @@ class StudioTest(unittest.TestCase):
         self.assertIn('touched h1', message)
         self.assertIn('preview-document-css-pixels', message)
         self.assertIn('949×2862', message)
-        with patch.object(server.urllib.request, 'urlopen') as request:
-            request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
-            server.claude_apply([{'transcript': 'change this', 'strokes': [mark]}], '<html></html>')
-            prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
+        with patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
+            server.lyceum_apply([{'transcript': 'change this', 'strokes': [mark]}], '<html></html>')
+            prompt = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
         self.assertIn(message, prompt)
         self.assertNotIn('SKETCH on:', prompt)
+
+    def test_lyceum_apply_uses_chat_completions_and_returns_html(self):
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply('Follow the sketch', '<!DOCTYPE html><html><h1>Updated</h1></html>')
+            result = server.lyceum_apply([], '<html>old</html>', prompt='change it')
+        opener.assert_called_once_with(server.NoRedirect)
+        sent = opener.return_value.open.call_args.args[0]
+        body = json.loads(sent.data)
+        self.assertEqual(sent.full_url, 'https://api.lyceum.technology/openai/v1/chat/completions')
+        self.assertEqual(sent.get_header('Authorization'), 'Bearer test-only')
+        self.assertEqual(body['model'], 'deepseek/deepseek-v4-flash-0731')
+        self.assertEqual(body['reasoning_effort'], 'none')
+        self.assertEqual(body['messages'], [{'role': 'user', 'content': 'change it'}])
+        self.assertEqual(result, {'reasoning': 'Follow the sketch', 'html': '<!DOCTYPE html><html><h1>Updated</h1></html>'})
+
+    def test_empty_model_content_does_not_report_successful_apply(self):
+        reply = {'choices': [{'finish_reason': 'stop', 'message': {
+            'content': '', 'reasoning_content': 'I worked on the page but gave no final answer'
+        }}]}
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+             patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(reply).encode()
+            code, result = self.post('/api/apply', {
+                'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
+                'current_html': '<html><h1>Old</h1></html>'
+            })
+        self.assertNotEqual(code, 200)
+        self.assertIn('error', result)
+
+    def test_truncated_or_non_html_model_answer_does_not_consume_turn(self):
+        payload = {'bundles': [{'transcript': 'Change the heading', 'strokes': []}],
+                   'current_html': '<html><h1>Old</h1></html>'}
+        answers = [
+            {'finish_reason': 'length', 'message': {'content': json.dumps({
+                'reasoning': 'started', 'html': '<html><h1>Partial</h1></html>'})}},
+            {'finish_reason': 'stop', 'message': {'content': json.dumps({
+                'reasoning': 'started', 'html': '<html><h1>Partial'})}},
+            {'finish_reason': 'stop', 'message': {'content': json.dumps({
+                'reasoning': 'started', 'html': 'not HTML'})}},
+        ]
+        for answer in answers:
+            with self.subTest(answer=answer['message']['content']), \
+                 patch.object(server, 'LYCEUM_KEY', 'test-only'), \
+                 patch.object(server.urllib.request, 'build_opener') as opener:
+                opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps({'choices': [answer]}).encode()
+                code, result = self.post('/api/apply', payload)
+                self.assertNotEqual(code, 200)
+                self.assertIn('error', result)
+
+    def test_provider_bearer_token_does_not_follow_redirect(self):
+        visited = []
+
+        class Sink(BaseHTTPRequestHandler):
+            def do_GET(self):
+                visited.append(self.headers.get('Authorization'))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        sink = ThreadingHTTPServer(('127.0.0.1', 0), Sink)
+        thread = threading.Thread(target=sink.serve_forever, daemon=True)
+        thread.start()
+
+        class Redirect(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(302)
+                self.send_header('Location', f'http://127.0.0.1:{sink.server_port}/other-origin')
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        source = ThreadingHTTPServer(('127.0.0.1', 0), Redirect)
+        source_thread = threading.Thread(target=source.serve_forever, daemon=True)
+        source_thread.start()
+        try:
+            req = Request(f'http://127.0.0.1:{source.server_port}/provider', data=b'{}',
+                          headers={'Authorization': 'Bearer test-only'})
+            with self.assertRaises(HTTPError) as error:
+                server.urllib.request.build_opener(server.NoRedirect).open(req, timeout=2)
+            self.assertEqual(error.exception.code, 302)
+            self.assertEqual(visited, [])
+        finally:
+            source.shutdown()
+            source.server_close()
+            source_thread.join()
+            sink.shutdown()
+            sink.server_close()
+            thread.join()
 
     def test_reference_points_to_identifiable_sketch(self):
         stroke = self.stroke()
@@ -266,11 +364,11 @@ class StudioTest(unittest.TestCase):
         mark = {'id': stroke['id'], 'shape': stroke['shape'], 't': stroke['t'],
                 't_end': stroke['t_end'], 'enclosed_element': stroke['enclosed_element'],
                 'strokes': [stroke]}
-        with patch.object(server.urllib.request, 'urlopen') as request:
-            request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
-            server.claude_apply([{'transcript':'make this green','strokes':[mark],
+        with patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
+            server.lyceum_apply([{'transcript':'make this green','strokes':[mark],
                                   'references':[{'word':'this','atMs':2750,'strokeId':'during'}]}],'<html></html>')
-        prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
+        prompt = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
         self.assertIn('SKETCH during:',prompt)
         self.assertIn('REFERENCE "this" -> during',prompt)
 
@@ -280,7 +378,7 @@ class StudioTest(unittest.TestCase):
         mark = {'id': first['id'], 'shape': 'x', 't': 10, 't_end': 35,
                 'enclosed_element': '', 'strokes': [first, second]}
         bundle = {'t_start': 10, 't_end': 35, 'transcript': 'remove this', 'strokes': [mark]}
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply') as agent:
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply') as agent:
             code, _ = self.post('/api/apply', {'bundles': [bundle], 'current_html': '<html></html>'})
             self.assertEqual(code, 409)
             agent.assert_not_called()
@@ -302,10 +400,10 @@ class StudioTest(unittest.TestCase):
             code, _ = self.post('/api/apply', {'bundles': [bundle], 'current_html': '<html></html>'})
             self.assertEqual(code, 200)
             agent.assert_called_once()
-        with patch.object(server.urllib.request, 'urlopen') as request:
-            request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
-            server.claude_apply([bundle], '<html></html>')
-            prompt = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
+        with patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
+            server.lyceum_apply([bundle], '<html></html>')
+            prompt = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
         self.assertIn('X', prompt)
         self.assertIn(message, prompt)
         self.assertIn('2 ordered original paths', message)
@@ -321,7 +419,7 @@ class StudioTest(unittest.TestCase):
                 't_end': stroke['t_end'], 'enclosed_element': '', 'strokes': [stroke]}
         code, receipt = self.post('/api/marks', mark)
         self.assertEqual(code, 201)
-        with patch.object(server, 'ANTHROPIC_KEY', ''):
+        with patch.object(server, 'LYCEUM_KEY', ''):
             code, unavailable = self.post('/api/apply', {
                 'bundles': [{'transcript': 'move this', 'strokes': [mark]}],
                 'current_html': '<html></html>'})
@@ -345,7 +443,7 @@ class StudioTest(unittest.TestCase):
                 'enclosed_element': '', 'strokes': [first, second]}
         code, _ = self.post('/api/marks', mark)
         self.assertEqual(code, 400)
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server, 'claude_apply') as agent:
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server, 'lyceum_apply') as agent:
             code, _ = self.post('/api/apply', {'bundles': [{'strokes': [mark]}], 'current_html': '<html></html>'})
             self.assertEqual(code, 409)
             agent.assert_not_called()
@@ -369,15 +467,15 @@ class StudioTest(unittest.TestCase):
         _, receipt = self.post('/api/marks', mark)
         payload = {'bundles': [{'transcript': 'change this', 'strokes': [mark]}],
                    'current_html': '<html><body><h1>Draw together</h1></body></html>'}
-        with patch.object(server, 'ANTHROPIC_KEY', ''):
+        with patch.object(server, 'LYCEUM_KEY', ''):
             code, unavailable = self.post('/api/apply', payload)
         self.assertEqual(code, 503)
         self.assertIn(receipt['agent_message'], unavailable['agent_message'])
         self.assertIn(payload['current_html'], unavailable['agent_message'])
-        with patch.object(server, 'ANTHROPIC_KEY', 'test-only'), patch.object(server.urllib.request, 'urlopen') as request:
-            request.return_value.read.return_value = json.dumps({'content': [{'text': json.dumps({'reasoning': 'ok', 'html': '<html></html>'})}]}).encode()
+        with patch.object(server, 'LYCEUM_KEY', 'test-only'), patch.object(server.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = lyceum_reply()
             code, result = self.post('/api/apply', payload)
-            sent = json.loads(request.call_args.args[0].data)['messages'][0]['content'][0]['text']
+            sent = json.loads(opener.return_value.open.call_args.args[0].data)['messages'][0]['content']
         self.assertEqual(code, 200)
         self.assertEqual(result['agent_message'], sent)
         self.assertIn(receipt['agent_message'], sent)

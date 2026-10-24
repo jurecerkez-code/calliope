@@ -140,7 +140,7 @@
       await Promise.all(marks.map(mark=>pending[mark.id]));
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;
       if(!canApply(marks,deliveries)){addLine('err','RETRY FAILED MARKS BEFORE APPLY');return;}
-      status='ANTHROPIC IS REASONING...';
+      status='LYCEUM IS REASONING...';
       const response=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bundles,relations,current_html:currentHtml})});
       const out=await response.json();
       if(mode!=='website'||operation!=='live'||modeVersion!==runModeVersion)return;

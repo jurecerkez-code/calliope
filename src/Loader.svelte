@@ -32,7 +32,7 @@
       <div class="vd-tiles" aria-hidden="true">
         <div class="vd-tile"><img src="/assets/reson8-logo.png" alt=""></div>
         <div class="vd-tile"><span class="vd-te">{'{Tech: Europe}'}</span></div>
-        <div class="vd-tile"><img src="/assets/anthropic-a.svg" alt=""></div>
+        <div class="vd-tile"><img src="/assets/lyceum-wordmark.svg" alt=""></div>
       </div>
     </div>
     <h1 class="vd-title">CALLIOPE</h1>

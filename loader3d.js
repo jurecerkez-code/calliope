@@ -1,5 +1,5 @@
 // Calliope loading screen: 4 chrome-glass sponsor logos (Jamie, Reson8, {Tech: Europe},
-// Anthropic) rendered from the Blender studio scene (logos.blend), on glass tiles.
+// Lyceum) rendered from the Blender studio scene (logos.blend), on glass tiles.
 // Upgrades the CSS splash to real 3D when WebGL is available.
 import * as THREE from 'three';
 import { RoomEnvironment } from './vendor/RoomEnvironment.js';
@@ -118,13 +118,13 @@ export function start(canvas, finish) {
     loadImage('assets/render-jamiej.png'),
     loadImage('assets/render-reson8.png'),
     loadImage('assets/render-techeurope.png'),
-    loadImage('assets/render-anthropica.png')
-  ]).then(([jamieImg, reson8Img, techeuropeImg, anthropicImg]) => {
+    loadImage('assets/render-lyceum.png')
+  ]).then(([jamieImg, reson8Img, techeuropeImg, lyceumImg]) => {
     const logos = [
       { tex: plainTexture(jamieImg), w: 1.15, h: 1.15 },
       { tex: plainTexture(reson8Img), w: 1.72, h: 1.72 * 304 / 1024 },
       { tex: plainTexture(techeuropeImg), w: 1.72, h: 1.72 * 225 / 1400 },
-      { tex: plainTexture(anthropicImg), w: 1.3, h: 1.3 * 827 / 1024 }
+      { tex: plainTexture(lyceumImg), w: 1.72, h: 1.72 * 656 / 4352 }
     ];
     const groups = [];
     logos.forEach((L, i) => {
