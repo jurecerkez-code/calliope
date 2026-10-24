@@ -20,7 +20,6 @@ let marks = [];            // drawings since the last apply
 let history = [];          // reasoning strings already applied
 let chunks = [];           // {t, text, final}
 let appliedUpTo = 0;       // index into chunks already sent
-let rec = null;
 let startedAt = 0;
 let pageHost = '';
 let pageUrl = '';
@@ -431,10 +430,13 @@ async function apply(override) {
 
     const n = applyOps(data.ops || []);
     const secs = (ms / 1000).toFixed(2);
-    $('#latency').textContent = secs + 's · ' + shortModel(data.model);
+    const who = (data.provider === 'groq' ? 'groq' : data.provider || '') +
+                ' ' + shortModel(data.model);
+    $('#latency').textContent = secs + 's · ' + who.trim();
     if (data.reasoning) history.push(data.reasoning);
     feed('<b>→</b> ' + (data.reasoning || '(no reasoning)') +
-         ' <span class="ok">' + n + ' op' + (n === 1 ? '' : 's') + ' · ' + secs + 's</span>');
+         ' <span class="ok">' + n + ' op' + (n === 1 ? '' : 's') + ' · ' + secs + 's · ' +
+         who.replace('&', '&amp;') + '</span>');
 
     marks = [];
     clearAnchors();

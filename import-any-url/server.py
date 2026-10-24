@@ -28,11 +28,16 @@ PORT = int(os.environ.get("PORT", "8899"))
 sys.path.insert(0, HERE)
 from import_site import fetch, sanitize, normalize_url, title_of, text_weight  # noqa: E402
 
-# Grok 4.20 is the only xAI model that fits the interactive budget: 0.77s to first
-# token, ~1.0s end to end. Every other Grok measured 4-76s (see README).
-MODEL = os.environ.get("CALLIOPE_MODEL", "x-ai/grok-4.20")
-FALLBACK_MODEL = os.environ.get("CALLIOPE_FALLBACK_MODEL", "x-ai/grok-4.7")
-OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
+# --- models ---------------------------------------------------------------
+# This workload asks for ~40 tokens of JSON. Time-to-first-token dominates, but
+# Groq's inference is the fastest hosted option for small outputs, so it leads
+# the chain when its key is present; OpenRouter/Grok stays as the fallback.
+GROQ_URL = os.environ.get("CALLIOPE_GROQ_URL") or "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_URL = os.environ.get("CALLIOPE_OPENROUTER_URL") or "https://openrouter.ai/api/v1/chat/completions"
+
+GROQ_MODEL = os.environ.get("CALLIOPE_GROQ_MODEL", "llama-3.3-70b-versatile")
+OPENROUTER_MODEL = os.environ.get("CALLIOPE_MODEL", "x-ai/grok-4.20")
+OPENROUTER_FALLBACK = os.environ.get("CALLIOPE_FALLBACK_MODEL", "x-ai/grok-4.7")
 
 SYSTEM = """You are the edit engine behind a live webpage editor. A designer speaks and draws on a rendered website; you turn that into DOM operations that apply instantly.
 
@@ -58,30 +63,58 @@ Rules:
 
 # ---------------------------------------------------------------- key handling
 
-def api_key():
-    """Env first, then .env files, matching how the rest of the repo reads keys."""
-    k = os.environ.get("OPENROUTER_API_KEY")
-    if k:
-        return k.strip()
-    candidates = [
-        os.path.join(HERE, ".env"),                 # import-any-url/.env
-        os.path.join(HERE, os.pardir, ".env"),      # repo root .env
-        os.path.expanduser("~/.hermes/.env"),
-    ]
-    for path in candidates:
+def secret(name):
+    """Environment first, then .env files — the same order the studio uses."""
+    v = os.environ.get(name)
+    if v:
+        return v.strip()
+    for path in (os.path.join(HERE, ".env"),                    # import-any-url/.env
+                 os.path.join(HERE, os.pardir, ".env"),          # repo root .env
+                 os.path.expanduser("~/.hermes/.env")):
         if not os.path.isfile(path):
             continue
         try:
             for line in open(path, encoding="utf-8", errors="replace"):
-                if line.strip().startswith("OPENROUTER_API_KEY="):
-                    return line.split("=", 1)[1].strip().strip("\"'")
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, val = s.split("=", 1)
+                if k.strip() == name:
+                    return val.strip().strip("\"'")
         except OSError:
             continue
-    raise RuntimeError(
-        "OPENROUTER_API_KEY not found — set it in the environment, or in "
-        "import-any-url/.env or the repo root .env")
+    return ""
+
+
+GROQ_KEY = secret("GROQ_API_KEY")
+OPENROUTER_KEY = secret("OPENROUTER_API_KEY")
+
+
+def providers():
+    """(provider, url, model, key) in the order we try them.
+
+    Groq leads: it is the fastest hosted inference for a 40-token reply. Grok
+    stays behind it so an empty Groq key, a rate limit, or a bad response costs
+    one fallback hop instead of the demo.
+    """
+    chain = []
+    if GROQ_KEY:
+        chain.append(("groq", GROQ_URL, GROQ_MODEL, GROQ_KEY))
+    if OPENROUTER_KEY:
+        chain.append(("openrouter", OPENROUTER_URL, OPENROUTER_MODEL, OPENROUTER_KEY))
+        chain.append(("openrouter", OPENROUTER_URL, OPENROUTER_FALLBACK, OPENROUTER_KEY))
+    return chain
 
 # ------------------------------------------------------------- model plumbing
+
+class ModelError(Exception):
+    """Upstream provider said no: carries the status and the body it sent."""
+
+    def __init__(self, code, detail):
+        self.code = code
+        self.detail = detail
+        super().__init__("http %s: %s" % (code, detail))
+
 
 def build_user_prompt(payload):
     outline = (payload.get("outline") or "").strip()[:9000]
@@ -114,7 +147,8 @@ def build_user_prompt(payload):
     return "\n".join(parts)
 
 
-def call_openrouter(model, system, user, timeout=12, json_mode=True):
+def call_model(prov, model, key, url, system, user, timeout=12, json_mode=True):
+    """Both Groq and OpenRouter speak the OpenAI chat-completions shape."""
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system},
@@ -124,21 +158,20 @@ def call_openrouter(model, system, user, timeout=12, json_mode=True):
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
-    req = urllib.request.Request(OPENROUTER, data=json.dumps(payload).encode(), headers={
-        "Authorization": "Bearer " + api_key(),
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://127.0.0.1:%d" % PORT,
-        "X-Title": "Calliope",
-    })
+    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    if prov == "openrouter":
+        headers["HTTP-Referer"] = "http://127.0.0.1:%d" % PORT
+        headers["X-Title"] = "Calliope"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")
-        # some providers reject response_format; retry plainly, we parse tolerantly
+        # some models reject response_format; retry plainly, we parse tolerantly
         if json_mode and e.code in (400, 422) and "response_format" in detail:
-            return call_openrouter(model, system, user, timeout, json_mode=False)
-        raise urllib.error.HTTPError(e.url, e.code, detail, e.hdrs, None)
+            return call_model(prov, model, key, url, system, user, timeout, json_mode=False)
+        raise ModelError(e.code, detail) from None
 
 
 def extract_json(text):
@@ -290,7 +323,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(403, "nope", "text/plain")
             return self.file(fp)
         if p == "/api/health":
-            return self.j(200, {"ok": True, "model": MODEL, "site": os.path.isfile(PAGE)})
+            chain = providers()
+            return self.j(200, {
+                "ok": True,
+                "site": os.path.isfile(PAGE),
+                "chain": [{"provider": c[0], "model": c[2]} for c in chain],
+            })
         return self.send(404, "not found", "text/plain")
 
     def do_POST(self):
@@ -357,9 +395,13 @@ class Handler(BaseHTTPRequestHandler):
         allowed = set(re.findall(r"\[([A-Za-z0-9_-]+)\]", payload.get("outline") or ""))
         user = build_user_prompt(payload)
         last_err = None
-        for model in (MODEL, FALLBACK_MODEL):
+        chain = providers()
+        if not chain:
+            return self.j(503, {"error": "no model configured — set GROQ_API_KEY or OPENROUTER_API_KEY"})
+        for prov, url, model, key in chain:
             try:
-                data = call_openrouter(model, SYSTEM, user)
+                t_call = time.time()
+                data = call_model(prov, model, key, url, SYSTEM, user)
                 msg = data["choices"][0]["message"]["content"]
                 obj = extract_json(msg)
                 if obj is None:
@@ -371,12 +413,14 @@ class Handler(BaseHTTPRequestHandler):
                     "reasoning": str(obj.get("reasoning") or "")[:300],
                     "ops": ops,
                     "dropped": dropped,
+                    "provider": prov,
                     "model": data.get("model", model),
                     "tokens": usage.get("completion_tokens"),
+                    "upstream_ms": int((time.time() - t_call) * 1000),
                     "ms": int((time.time() - t0) * 1000),
                 })
-            except urllib.error.HTTPError as e:
-                last_err = "http %s: %s" % (e.code, e.read().decode("utf-8", "replace")[:200])
+            except ModelError as e:
+                last_err = str(e)[:220]
             except Exception as e:
                 last_err = "%s: %s" % (type(e).__name__, str(e)[:200])
         return self.j(502, {"error": last_err or "model failed", "ms": int((time.time() - t0) * 1000)})
@@ -399,11 +443,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
+    chain = providers()
+    print("calliope  http://127.0.0.1:%d" % PORT)
+    print("  model chain: %s" % (" -> ".join("%s/%s" % (p, m) for p, _u, m, _k in chain) or "NONE (set GROQ_API_KEY)"))
+    print("  imported page: %s" % ("ok" if os.path.isfile(PAGE) else "none yet — paste a link in the app"))
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     srv.daemon_threads = True
-    site_ok = os.path.isfile(PAGE)
-    print("calliope  http://127.0.0.1:%d   model=%s" % (PORT, MODEL))
-    print("imported page: %s" % ("ok" if site_ok else "none yet — paste a link in the app"))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

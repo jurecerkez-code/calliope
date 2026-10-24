@@ -8,13 +8,13 @@ live transcript. Draw on the page, say what you want, and it rewrites itself in
 about a second.
 
 ```bash
-cp .env.example .env   # add OPENROUTER_API_KEY (or use the repo root .env)
+cp .env.example .env   # GROQ_API_KEY (OPENROUTER_API_KEY optional fallback)
 python3 server.py      # http://127.0.0.1:8899
 # or: ./run.sh         # starts the server and opens Chrome
 ```
 
-No `npm`, no `uv`, no build step, no port clash with the studio (8899 vs 8800) —
-both can run at once.
+No `npm`, no build step, no port clash with the studio (8899 vs 8800) — both can
+run at once.
 
 Open **http://127.0.0.1:8899** in Chrome (speech recognition needs Chrome), paste a
 link, press **MIC**, talk, draw.
@@ -76,7 +76,11 @@ root `.env`, or `~/.hermes/.env` — same convention as the studio server.
 
 ## Why this model
 
-Grok, measured on this exact workload on OpenRouter (streamed TTFT / total, warm):
+The chain is **Groq first, Grok second**, and it is built from measurements, not
+brand preference. A single edit needs ~40 tokens of JSON, so the budget is
+time-to-first-token.
+
+Grok, measured on this exact workload through OpenRouter (streamed TTFT / total):
 
 | Grok model | TTFT | Total |
 |---|---|---|
@@ -84,20 +88,20 @@ Grok, measured on this exact workload on OpenRouter (streamed TTFT / total, warm
 | x-ai/grok-4.7 | 1.57s | 4.08s |
 | x-ai/grok-4.6 | 1.30s | 8.51s |
 | x-ai/grok-4.3 | 1.45s | 8.67s |
-| x-ai/grok-build-0.1 | 1.11s | 11.59s |
 | x-ai/grok-4.5 | 15.70s | 75.84s |
 
-Only `grok-4.20` fits the interactive budget — the rest are 4–76s, which is
-rehearsal-killing on stage. Default is **`x-ai/grok-4.20`**, falling back to
-`x-ai/grok-4.7` only if the primary errors. Override either with
-`CALLIOPE_MODEL=` / `CALLIOPE_FALLBACK_MODEL=`.
+Groq is the primary because its inference is the fastest hosted path for short
+outputs, and the request shape is identical (both OpenAI-compatible). Default
+`llama-3.3-70b-versatile`, overridable with `CALLIOPE_GROQ_MODEL`.
 
-Benchmarked against the alternatives, Gemini 3.1 flash-lite is still the fastest
-thing available (0.52s / 0.67s) — Grok 4.20 costs ~0.4s more per edit and writes
-slightly more conservative values, but it is the fastest Grok by a wide margin.
+**Not yet benchmarked:** no Groq key was available while this was built, so the
+Groq numbers are unmeasured. Run `python3 bench.py` with a key set to fill the
+table in — it times TTFT and total for every configured model and prints the
+winner. Until then, `history` shows which model actually answered each edit
+(`0.41s · groq llama-3.3-70b-versatile`), so nobody has to guess.
 
-End-to-end, typed or spoken, in the running app: **0.81s – 1.5s** per edit including
-network, model, and DOM patch.
+If Groq errors, rate-limits, or returns unusable JSON, the request falls through
+to Grok (`x-ai/grok-4.20`, then `x-ai/grok-4.7`) instead of failing the edit.
 
 ## Speech
 
@@ -121,7 +125,7 @@ If mic permission is blocked, type in the box at the bottom instead — same pat
 
 | File | What |
 |---|---|
-| `server.py` | static host, `/api/import`, `/api/edit` (model), `/api/publish` |
+| `server.py` | static host, `/api/import`, `/api/edit` (model chain), `/api/publish` |
 | `import_site.py` | fetch + sanitize a URL (also usable standalone) |
 | `static/index.html` | entry door + two-pane workspace |
 | `static/app.js` | importing, drawing, outline, transcript, ops application |
